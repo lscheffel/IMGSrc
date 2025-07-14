@@ -2,20 +2,24 @@ import sys
 import requests
 from bs4 import BeautifulSoup
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLineEdit, QPushButton, QListWidget, QFileDialog, QSpinBox, QLabel, QCheckBox)
+                             QLineEdit, QPushButton, QListWidget, QFileDialog, QSpinBox, QLabel, QCheckBox,
+                             QTabWidget, QTableWidget, QTableWidgetItem, QMessageBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import os
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 import re
 from datetime import datetime
+import sqlite3
+import redis
+import hashlib
 
 class ScraperThread(QThread):
     result_signal = pyqtSignal(list)
     error_signal = pyqtSignal(str)
     title_signal = pyqtSignal(str)
-    progress_signal = pyqtSignal(str)
     user_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(str)
 
     def __init__(self, url, min_size):
         super().__init__()
@@ -70,7 +74,7 @@ class ScraperThread(QThread):
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith(('.webp', '.gif')):
+                        if not img_url.lower().endswith(('.gif','.webp')):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -95,20 +99,97 @@ class ImageScraper(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Scraper")
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 800, 500)
         self.image_urls = []
         self.page_title = "album"
         self.user_name = "unknown_user"
+        self.downloaded_urls_set = set()
+        self.init_db()
+        self.init_redis()
+        self.load_cache()
         self.init_ui()
+
+    def init_db(self):
+        self.conn = sqlite3.connect('downloads.db', check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS downloads (
+                id INTEGER PRIMARY KEY,
+                filename TEXT,
+                user TEXT,
+                url TEXT UNIQUE,
+                url_hash TEXT,
+                download_date TEXT,
+                path TEXT,
+                status TEXT
+            )
+        ''')
+        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_url_hash ON downloads(url_hash)')
+        self.conn.commit()
+
+    def init_redis(self):
+        try:
+            self.redis_client = redis.Redis(host='localhost', port=6379, db=0)
+            self.redis_client.ping()
+        except redis.ConnectionError:
+            self.redis_client = None
+            print("Redis não disponível, usando apenas SQLite.")
+
+    def load_cache(self):
+        self.downloaded_urls_set = set()
+        self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active"')
+        for row in self.cursor.fetchall():
+            self.downloaded_urls_set.add(row[0])
+
+    def sync_folders(self):
+        self.cursor.execute('SELECT url, path FROM downloads WHERE status="active"')
+        for url, path in self.cursor.fetchall():
+            if not os.path.exists(path):
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                self.cursor.execute('UPDATE downloads SET status="deleted" WHERE url_hash=?', (url_hash,))
+                if self.redis_client:
+                    self.redis_client.srem('downloaded_urls', url_hash)
+        self.conn.commit()
+        self.load_cache()
+
+    def clear_history(self):
+        reply = QMessageBox.question(self, 'Limpar Histórico', 'Deseja limpar todo o histórico de downloads?',
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.cursor.execute('DELETE FROM downloads')
+            self.conn.commit()
+            if self.redis_client:
+                self.redis_client.flushdb()
+            self.downloaded_urls_set.clear()
+            self.result_list.addItem("Histórico limpo com sucesso.")
+            self.update_history_view()
+
+    def export_history(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Salvar Histórico", "", "CSV Files (*.csv)")
+        if file_path:
+            self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write('filename,user,url,download_date,path,status\n')
+                for row in self.cursor.fetchall():
+                    f.write(','.join(str(x) for x in row) + '\n')
+            self.result_list.addItem(f"Histórico exportado para: {file_path}")
 
     def init_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
 
+        # Abas
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # Aba principal
+        main_tab = QWidget()
+        main_layout = QVBoxLayout(main_tab)
+
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Digite a URL do tape (ex.: https://imgsrc.ru/.../tape-....html)")
-        layout.addWidget(self.url_input)
+        main_layout.addWidget(self.url_input)
 
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("Tamanho mínimo (KB):"))
@@ -116,7 +197,7 @@ class ImageScraper(QMainWindow):
         self.size_input.setValue(10)
         self.size_input.setRange(1, 10000)
         size_layout.addWidget(self.size_input)
-        layout.addLayout(size_layout)
+        main_layout.addLayout(size_layout)
 
         conn_layout = QHBoxLayout()
         conn_layout.addWidget(QLabel("Conexões simultâneas:"))
@@ -124,22 +205,26 @@ class ImageScraper(QMainWindow):
         self.conn_input.setValue(5)
         self.conn_input.setRange(1, 20)
         conn_layout.addWidget(self.conn_input)
-        layout.addLayout(conn_layout)
+        main_layout.addLayout(conn_layout)
 
         self.user_folder_check = QCheckBox("Criar pasta de usuário")
         self.user_folder_check.setChecked(False)
-        layout.addWidget(self.user_folder_check)
+        main_layout.addWidget(self.user_folder_check)
 
         self.subfolder_check = QCheckBox("Criar subpasta com título do álbum")
         self.subfolder_check.setChecked(True)
-        layout.addWidget(self.subfolder_check)
+        main_layout.addWidget(self.subfolder_check)
+
+        self.overwrite_check = QCheckBox("Sobrescrever imagens existentes")
+        self.overwrite_check.setChecked(False)
+        main_layout.addWidget(self.overwrite_check)
 
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.search_images)
-        layout.addWidget(self.search_btn)
+        main_layout.addWidget(self.search_btn)
 
         self.result_list = QListWidget()
-        layout.addWidget(self.result_list)
+        main_layout.addWidget(self.result_list)
 
         folder_layout = QHBoxLayout()
         self.folder_input = QLineEdit()
@@ -148,11 +233,36 @@ class ImageScraper(QMainWindow):
         self.folder_btn = QPushButton("Browse")
         self.folder_btn.clicked.connect(self.select_folder)
         folder_layout.addWidget(self.folder_btn)
-        layout.addLayout(folder_layout)
+        main_layout.addLayout(folder_layout)
 
         self.download_btn = QPushButton("Download")
         self.download_btn.clicked.connect(self.download_images)
-        layout.addWidget(self.download_btn)
+        main_layout.addWidget(self.download_btn)
+
+        self.tabs.addTab(main_tab, "Busca e Download")
+
+        # Aba de histórico
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(6)
+        self.history_table.setHorizontalHeaderLabels(['Filename', 'User', 'URL', 'Download Date', 'Path', 'Status'])
+        self.history_table.setSortingEnabled(True)
+        history_layout.addWidget(self.history_table)
+
+        history_btn_layout = QHBoxLayout()
+        self.clear_btn = QPushButton("Limpar Histórico")
+        self.clear_btn.clicked.connect(self.clear_history)
+        history_btn_layout.addWidget(self.clear_btn)
+
+        self.export_btn = QPushButton("Exportar Histórico")
+        self.export_btn.clicked.connect(self.export_history)
+        history_btn_layout.addWidget(self.export_btn)
+        history_layout.addLayout(history_btn_layout)
+
+        self.tabs.addTab(history_tab, "Histórico de Downloads")
+        self.update_history_view()
 
     def search_images(self):
         self.result_list.clear()
@@ -163,7 +273,8 @@ class ImageScraper(QMainWindow):
             return
 
         self.search_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando busca de imagens WebP e GIF...")
+        self.result_list.addItem("Iniciando busca de imagens (.webp)...")
+        self.sync_folders()
 
         self.thread = ScraperThread(url, self.size_input.value())
         self.thread.result_signal.connect(self.display_results)
@@ -191,12 +302,35 @@ class ImageScraper(QMainWindow):
     def search_finished(self):
         self.search_btn.setEnabled(True)
         if not self.image_urls:
-            self.result_list.addItem("Nenhuma imagem WebP ou GIF encontrada!")
+            self.result_list.addItem("Nenhuma imagem .webp encontrada!")
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
         if folder:
             self.folder_input.setText(folder)
+
+    def update_history_view(self):
+        self.history_table.setRowCount(0)
+        self.cursor.execute('SELECT DISTINCT user, path FROM downloads WHERE status="active"')
+        galleries = set()
+        for user, path in self.cursor.fetchall():
+            album = os.path.basename(os.path.dirname(path)) if self.subfolder_check.isChecked() else os.path.basename(path)
+            galleries.add(f"{user} - {album}")
+
+        self.cursor.execute('SELECT COUNT(*) FROM downloads')
+        total_rows = len(galleries) + self.cursor.fetchone()[0]
+        self.history_table.setRowCount(total_rows)
+        row = 0
+        for gallery in sorted(galleries):
+            self.history_table.setItem(row, 0, QTableWidgetItem(gallery))
+            row += 1
+
+        self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
+        for record in self.cursor.fetchall():
+            for col, value in enumerate(record):
+                self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
+            row += 1
+        self.history_table.resizeColumnsToContents()
 
     def download_images(self):
         folder = self.folder_input.text()
@@ -226,19 +360,43 @@ class ImageScraper(QMainWindow):
                 self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}. Usando pasta anterior.")
                 # Mantém dest_folder como pasta do usuário ou raiz
 
+        self.result_list.addItem(f"Estrutura criada: {dest_folder}")
+
         def download_single_image(url):
+            url_hash = hashlib.md5(url.encode()).hexdigest()
+            if not self.overwrite_check.isChecked() and (url_hash in self.downloaded_urls_set or
+                                                        (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))):
+                self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
+                date = self.cursor.fetchone()
+                return url, None, f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})"
+            
             try:
                 filename = os.path.join(dest_folder, url.split('/')[-1])
                 urllib.request.urlretrieve(url, filename)
-                return f"Baixado: {filename}"
+                return url, filename, f"Baixado: {filename}"
             except Exception as e:
-                return f"Erro ao baixar {url}: {e}"
+                return url, None, f"Erro ao baixar {url}: {e}"
 
         max_workers = self.conn_input.value()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = executor.map(download_single_image, self.image_urls)
-            for result in results:
-                self.result_list.addItem(result)
+            results = list(executor.map(download_single_image, self.image_urls))
+        
+        # Processar resultados na thread principal
+        for url, filename, message in results:
+            self.result_list.addItem(message)
+            if filename:
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                self.cursor.execute('''
+                    INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (os.path.basename(filename), self.user_name, url, url_hash, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
+                self.conn.commit()
+                if self.redis_client:
+                    self.redis_client.sadd('downloaded_urls', url_hash)
+                self.downloaded_urls_set.add(url_hash)
+
+        self.update_history_view()
+        self.sync_folders()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
