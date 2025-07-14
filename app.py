@@ -8,6 +8,7 @@ import os
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 import re
+from datetime import datetime
 
 class ScraperThread(QThread):
     result_signal = pyqtSignal(list)
@@ -18,7 +19,7 @@ class ScraperThread(QThread):
     def __init__(self, url, min_size):
         super().__init__()
         self.url = url
-        self.min_size = min_size * 1024  # Converter KB para bytes
+        self.min_size = min_size * 1024
 
     def run(self):
         try:
@@ -26,20 +27,24 @@ class ScraperThread(QThread):
             session.headers.update({'User-Agent': 'Mozilla/5.0'})
             image_urls = []
 
-            # Acessar a primeira página para extrair URLs válidas
             response = session.get(self.url, timeout=5)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
             # Extrair título
             title_tag = soup.find('title')
-            page_title = title_tag.text.split(' @')[0] if title_tag else "album"
-            page_title = re.sub(r'[^\w\s-]', '', page_title).replace(' ', '_')
+            page_title = title_tag.text.split(' @')[0] if title_tag else ""
+            page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
+            page_title = re.sub(r'\s+', '_', page_title).rstrip('_')
+            page_title = re.sub(r'_+', '_', page_title)
+            if not page_title:
+                page_title = f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             self.title_signal.emit(page_title)
+            self.progress_signal.emit(f"Título da subpasta: {page_title}")
 
             # Extrair URLs das páginas do tape
             page_links = soup.find_all('a', href=re.compile(r'tape-.*\.html\?pwd=$'))
-            page_urls = [self.url]  # Incluir a primeira página
+            page_urls = [self.url]
             for link in page_links:
                 page_url = link['href']
                 if page_url.startswith('/'):
@@ -55,12 +60,11 @@ class ScraperThread(QThread):
                     response.raise_for_status()
                     soup = BeautifulSoup(response.text, 'html.parser')
 
-                    # Buscar imagens em <source> e <img>
                     source_tags = soup.find_all('source', srcset=True)
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith('.webp'):  # Apenas .webp
+                        if not img_url.lower().endswith('.webp'):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -95,12 +99,10 @@ class ImageScraper(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
 
-        # Campo para URL
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Digite a URL do tape (ex.: https://imgsrc.ru/.../tape-....html)")
         layout.addWidget(self.url_input)
 
-        # Controle de tamanho mínimo
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("Tamanho mínimo (KB):"))
         self.size_input = QSpinBox()
@@ -109,7 +111,6 @@ class ImageScraper(QMainWindow):
         size_layout.addWidget(self.size_input)
         layout.addLayout(size_layout)
 
-        # Controle de conexões simultâneas
         conn_layout = QHBoxLayout()
         conn_layout.addWidget(QLabel("Conexões simultâneas:"))
         self.conn_input = QSpinBox()
@@ -118,21 +119,17 @@ class ImageScraper(QMainWindow):
         conn_layout.addWidget(self.conn_input)
         layout.addLayout(conn_layout)
 
-        # Checkbox para subpasta
         self.subfolder_check = QCheckBox("Criar subpasta com título do álbum")
         self.subfolder_check.setChecked(True)
         layout.addWidget(self.subfolder_check)
 
-        # Botão de busca
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.search_images)
         layout.addWidget(self.search_btn)
 
-        # Lista de resultados
         self.result_list = QListWidget()
         layout.addWidget(self.result_list)
 
-        # Seletor de pasta
         folder_layout = QHBoxLayout()
         self.folder_input = QLineEdit()
         self.folder_input.setPlaceholderText("Selecione a pasta de destino")
@@ -142,7 +139,6 @@ class ImageScraper(QMainWindow):
         folder_layout.addWidget(self.folder_btn)
         layout.addLayout(folder_layout)
 
-        # Botão de download
         self.download_btn = QPushButton("Download")
         self.download_btn.clicked.connect(self.download_images)
         layout.addWidget(self.download_btn)
@@ -158,7 +154,6 @@ class ImageScraper(QMainWindow):
         self.search_btn.setEnabled(False)
         self.result_list.addItem("Iniciando busca de imagens (.webp)...")
 
-        # Iniciar thread de busca
         self.thread = ScraperThread(url, self.size_input.value())
         self.thread.result_signal.connect(self.display_results)
         self.thread.error_signal.connect(self.display_error)
@@ -199,8 +194,13 @@ class ImageScraper(QMainWindow):
 
         dest_folder = folder
         if self.subfolder_check.isChecked():
-            dest_folder = os.path.join(folder, self.page_title)
-            os.makedirs(dest_folder, exist_ok=True)
+            try:
+                dest_folder = os.path.join(folder, self.page_title)
+                os.makedirs(dest_folder, exist_ok=True)
+                self.result_list.addItem(f"Subpasta criada: {dest_folder}")
+            except Exception as e:
+                self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}. Usando pasta raiz.")
+                dest_folder = folder
 
         def download_single_image(url):
             try:
