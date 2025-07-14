@@ -40,7 +40,7 @@ class ScraperThread(QThread):
             # Encontrar link do tape usando padrão no href
             tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
             if not tape_link:
-                self.error_signal.emit("Link do tape não encontrado na página da galeria.")
+                self.error_signal.emit(f"Link do tape não encontrado na página da galeria: {self.url}")
                 return
             tape_url = tape_link['href']
             if tape_url.startswith('/'):
@@ -92,7 +92,7 @@ class ScraperThread(QThread):
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith(('.gif', '.webp')):
+                        if not img_url.lower().endswith(('.gif', '.webp', '.jpg', '.jpeg')):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -218,7 +218,7 @@ class ImageScraper(QMainWindow):
         main_layout = QVBoxLayout(main_tab)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Digite a URL da galeria (ex.: https://imgsrc.ru/.../84647553.html)")
+        self.url_input.setPlaceholderText("Digite URLs de galerias (ex.: https://imgsrc.ru/.../84647553.html, separadas por vírgula)")
         main_layout.addWidget(self.url_input)
 
         size_layout = QHBoxLayout()
@@ -301,9 +301,9 @@ class ImageScraper(QMainWindow):
     def search_images(self):
         self.result_list.clear()
         self.image_urls = []
-        url = self.url_input.text()
-        if not url:
-            self.result_list.addItem("Digite uma URL válida!")
+        urls_input = self.url_input.text().strip()
+        if not urls_input:
+            self.result_list.addItem("Digite pelo menos uma URL válida!")
             return
 
         self.search_btn.setEnabled(False)
@@ -311,34 +311,66 @@ class ImageScraper(QMainWindow):
         self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
         self.sync_folders()
 
-        self.thread = ScraperThread(url, self.size_input.value())
-        self.thread.result_signal.connect(self.display_results)
-        self.thread.error_signal.connect(self.display_error)
-        self.thread.title_signal.connect(self.set_page_title)
-        self.thread.user_signal.connect(self.set_user_name)
-        self.thread.progress_signal.connect(self.result_list.addItem)
-        self.thread.finished.connect(self.search_finished)
-        self.thread.start()
+        # Separar URLs por vírgula
+        urls = [url.strip() for url in urls_input.split(',') if url.strip()]
+        if not urls:
+            self.result_list.addItem("Nenhuma URL válida fornecida!")
+            self.search_btn.setEnabled(True)
+            self.one_click_btn.setEnabled(True)
+            return
 
-    def set_page_title(self, title):
-        self.page_title = title
+        # Processar cada URL
+        for url in urls:
+            self.result_list.addItem(f"Processando galeria: {url}")
+            thread = ScraperThread(url, self.size_input.value())
+            thread.result_signal.connect(lambda image_urls, u=url: self.display_results(image_urls, u))
+            thread.error_signal.connect(self.display_error)
+            thread.title_signal.connect(lambda title, u=url: self.set_page_title(title, u))
+            thread.user_signal.connect(lambda user, u=url: self.set_user_name(user, u))
+            thread.progress_signal.connect(self.result_list.addItem)
+            thread.finished.connect(self.search_finished)
+            thread.start()
+            # Armazenar thread para evitar garbage collection
+            if not hasattr(self, 'threads'):
+                self.threads = []
+            self.threads.append(thread)
 
-    def set_user_name(self, user):
-        self.user_name = user
+    def set_page_title(self, title, url):
+        # Armazenar título por URL
+        if not hasattr(self, 'titles'):
+            self.titles = {}
+        self.titles[url] = title
+        self.page_title = title  # Para compatibilidade com download
 
-    def display_results(self, image_urls):
-        self.image_urls = [url for url, _ in image_urls]
-        for url, size in image_urls:
-            self.result_list.addItem(f"{url} ({size // 1024} KB)")
+    def set_user_name(self, user, url):
+        # Armazenar usuário por URL
+        if not hasattr(self, 'users'):
+            self.users = {}
+        self.users[url] = user
+        self.user_name = user  # Para compatibilidade com download
+
+    def display_results(self, image_urls, url):
+        # Armazenar URLs de imagens por galeria
+        if not hasattr(self, 'image_urls_dict'):
+            self.image_urls_dict = {}
+        self.image_urls_dict[url] = [img_url for img_url, _ in image_urls]
+        self.image_urls.extend([img_url for img_url, _ in image_urls])
+        for img_url, size in image_urls:
+            self.result_list.addItem(f"{url}: {img_url} ({size // 1024} KB)")
 
     def display_error(self, error_msg):
         self.result_list.addItem(error_msg)
 
     def search_finished(self):
-        self.search_btn.setEnabled(True)
-        self.one_click_btn.setEnabled(True)
-        if not self.image_urls:
-            self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
+        # Verificar se todas as threads terminaram
+        if hasattr(self, 'threads'):
+            self.threads = [t for t in self.threads if t.isRunning()]
+            if not self.threads:
+                self.search_btn.setEnabled(True)
+                self.one_click_btn.setEnabled(True)
+                if not self.image_urls:
+                    self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
+                del self.threads
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
@@ -380,79 +412,84 @@ class ImageScraper(QMainWindow):
             self.result_list.addItem("Nenhuma imagem para baixar!")
             return
 
-        dest_folder = folder
-        if force_user_folder or self.user_folder_check.isChecked():
+        # Processar imagens por URL da galeria
+        for gallery_url in getattr(self, 'image_urls_dict', {}):
+            user_name = self.users.get(gallery_url, "unknown_user")
+            page_title = self.titles.get(gallery_url, f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+
+            dest_folder = folder
+            if force_user_folder or self.user_folder_check.isChecked():
+                try:
+                    dest_folder = os.path.join(folder, user_name)
+                    os.makedirs(dest_folder, exist_ok=True)
+                    self.result_list.addItem(f"Pasta de usuário criada: {dest_folder}")
+                except Exception as e:
+                    self.result_list.addItem(f"Erro ao criar pasta de usuário '{user_name}': {e}. Usando pasta raiz.")
+                    dest_folder = folder
+
+            if force_subfolder or self.subfolder_check.isChecked():
+                try:
+                    dest_folder = os.path.join(dest_folder, page_title)
+                    os.makedirs(dest_folder, exist_ok=True)
+                    self.result_list.addItem(f"Subpasta criada: {dest_folder}")
+                except Exception as e:
+                    self.result_list.addItem(f"Erro ao criar subpasta '{page_title}': {e}. Usando pasta anterior.")
+
+            self.result_list.addItem(f"Estrutura criada para {gallery_url}: {dest_folder}")
+
+            # Verificar duplicatas na thread principal
+            urls_to_download = []
+            skip_messages = []
             try:
-                dest_folder = os.path.join(folder, self.user_name)
-                os.makedirs(dest_folder, exist_ok=True)
-                self.result_list.addItem(f"Pasta de usuário criada: {dest_folder}")
-            except Exception as e:
-                self.result_list.addItem(f"Erro ao criar pasta de usuário '{self.user_name}': {e}. Usando pasta raiz.")
-                dest_folder = folder
-
-        if force_subfolder or self.subfolder_check.isChecked():
-            try:
-                dest_folder = os.path.join(dest_folder, self.page_title)
-                os.makedirs(dest_folder, exist_ok=True)
-                self.result_list.addItem(f"Subpasta criada: {dest_folder}")
-            except Exception as e:
-                self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}. Usando pasta anterior.")
-
-        self.result_list.addItem(f"Estrutura criada: {dest_folder}")
-
-        # Verificar duplicatas na thread principal
-        urls_to_download = []
-        skip_messages = []
-        try:
-            for url in self.image_urls:
-                url_hash = hashlib.md5(url.encode()).hexdigest()
-                if not (force_overwrite or self.overwrite_check.isChecked()) and (
-                    url_hash in self.downloaded_urls_set or
-                    (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
-                ):
-                    self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
-                    date = self.cursor.fetchone()
-                    skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
-                else:
-                    urls_to_download.append(url)
-        except sqlite3.Error as e:
-            self.result_list.addItem(f"Erro ao verificar duplicatas: {e}")
-            return
-
-        def download_single_image(url):
-            try:
-                filename = os.path.join(dest_folder, url.split('/')[-1])
-                urllib.request.urlretrieve(url, filename)
-                return url, filename, f"Baixado: {filename}"
-            except Exception as e:
-                return url, None, f"Erro ao baixar {url}: {e}"
-
-        # Executar downloads
-        max_workers = self.conn_input.value()
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(download_single_image, urls_to_download))
-
-        # Exibir mensagens de skip
-        for message in skip_messages:
-            self.result_list.addItem(message)
-
-        # Processar resultados na thread principal
-        try:
-            for url, filename, message in results:
-                self.result_list.addItem(message)
-                if filename:
+                for url in self.image_urls_dict.get(gallery_url, []):
                     url_hash = hashlib.md5(url.encode()).hexdigest()
-                    self.cursor.execute('''
-                        INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (os.path.basename(filename), self.user_name, url, url_hash, 
-                          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
-                    self.conn.commit()
-                    if self.redis_client:
-                        self.redis_client.sadd('downloaded_urls', url_hash)
-                    self.downloaded_urls_set.add(url_hash)
-        except sqlite3.Error as e:
-            self.result_list.addItem(f"Erro ao registrar downloads: {e}")
+                    if not (force_overwrite or self.overwrite_check.isChecked()) and (
+                        url_hash in self.downloaded_urls_set or
+                        (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
+                    ):
+                        self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
+                        date = self.cursor.fetchone()
+                        skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
+                    else:
+                        urls_to_download.append(url)
+            except sqlite3.Error as e:
+                self.result_list.addItem(f"Erro ao verificar duplicatas para {gallery_url}: {e}")
+                continue
+
+            def download_single_image(url):
+                try:
+                    filename = os.path.join(dest_folder, url.split('/')[-1])
+                    urllib.request.urlretrieve(url, filename)
+                    return url, filename, f"Baixado: {filename}"
+                except Exception as e:
+                    return url, None, f"Erro ao baixar {url}: {e}"
+
+            # Executar downloads
+            max_workers = self.conn_input.value()
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(download_single_image, urls_to_download))
+
+            # Exibir mensagens de skip
+            for message in skip_messages:
+                self.result_list.addItem(message)
+
+            # Processar resultados na thread principal
+            try:
+                for url, filename, message in results:
+                    self.result_list.addItem(message)
+                    if filename:
+                        url_hash = hashlib.md5(url.encode()).hexdigest()
+                        self.cursor.execute('''
+                            INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (os.path.basename(filename), user_name, url, url_hash, 
+                              datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
+                        self.conn.commit()
+                        if self.redis_client:
+                            self.redis_client.sadd('downloaded_urls', url_hash)
+                        self.downloaded_urls_set.add(url_hash)
+            except sqlite3.Error as e:
+                self.result_list.addItem(f"Erro ao registrar downloads para {gallery_url}: {e}")
 
         self.update_history_view()
         self.sync_folders()
@@ -460,9 +497,9 @@ class ImageScraper(QMainWindow):
     def one_click(self):
         self.result_list.clear()
         self.image_urls = []
-        url = self.url_input.text()
-        if not url:
-            self.result_list.addItem("Digite uma URL válida!")
+        urls_input = self.url_input.text().strip()
+        if not urls_input:
+            self.result_list.addItem("Digite pelo menos uma URL válida!")
             return
         if not self.folder_input.text():
             self.result_list.addItem("Selecione uma pasta de destino!")
@@ -473,18 +510,33 @@ class ImageScraper(QMainWindow):
         self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
         self.sync_folders()
 
-        self.thread = ScraperThread(url, self.size_input.value())
-        self.thread.result_signal.connect(lambda image_urls: self.one_click_download(image_urls))
-        self.thread.error_signal.connect(self.display_error)
-        self.thread.title_signal.connect(self.set_page_title)
-        self.thread.user_signal.connect(self.set_user_name)
-        self.thread.progress_signal.connect(self.result_list.addItem)
-        self.thread.finished.connect(self.search_finished)
-        self.thread.start()
+        # Separar URLs por vírgula
+        urls = [url.strip() for url in urls_input.split(',') if url.strip()]
+        if not urls:
+            self.result_list.addItem("Nenhuma URL válida fornecida!")
+            self.search_btn.setEnabled(True)
+            self.one_click_btn.setEnabled(True)
+            return
 
-    def one_click_download(self, image_urls):
-        self.display_results(image_urls)
-        if self.image_urls:
+        # Processar cada URL
+        for url in urls:
+            self.result_list.addItem(f"Processando galeria: {url}")
+            thread = ScraperThread(url, self.size_input.value())
+            thread.result_signal.connect(lambda image_urls, u=url: self.one_click_download(image_urls, u))
+            thread.error_signal.connect(self.display_error)
+            thread.title_signal.connect(lambda title, u=url: self.set_page_title(title, u))
+            thread.user_signal.connect(lambda user, u=url: self.set_user_name(user, u))
+            thread.progress_signal.connect(self.result_list.addItem)
+            thread.finished.connect(self.search_finished)
+            thread.start()
+            # Armazenar thread para evitar garbage collection
+            if not hasattr(self, 'threads'):
+                self.threads = []
+            self.threads.append(thread)
+
+    def one_click_download(self, image_urls, url):
+        self.display_results(image_urls, url)
+        if self.image_urls_dict.get(url):
             self.download_images(force_user_folder=True, force_subfolder=True, force_overwrite=True)
         self.search_finished()
 
