@@ -2,38 +2,126 @@ import sys
 import requests
 from bs4 import BeautifulSoup
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLineEdit, QPushButton, QListWidget, QFileDialog, QSpinBox, QLabel)
-from PyQt5.QtCore import Qt
+                             QLineEdit, QPushButton, QListWidget, QFileDialog, QSpinBox, QLabel, QCheckBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import os
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+import re
+
+class ScraperThread(QThread):
+    result_signal = pyqtSignal(list)
+    error_signal = pyqtSignal(str)
+    title_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(str)
+
+    def __init__(self, url, min_size):
+        super().__init__()
+        self.url = url
+        self.min_size = min_size * 1024  # Converter KB para bytes
+
+    def run(self):
+        try:
+            session = requests.Session()
+            session.headers.update({'User-Agent': 'Mozilla/5.0'})
+            image_urls = []
+
+            # Acessar a primeira página para extrair URLs válidas
+            response = session.get(self.url, timeout=5)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # Extrair título
+            title_tag = soup.find('title')
+            page_title = title_tag.text.split(' @')[0] if title_tag else "album"
+            page_title = re.sub(r'[^\w\s-]', '', page_title).replace(' ', '_')
+            self.title_signal.emit(page_title)
+
+            # Extrair URLs das páginas do tape
+            page_links = soup.find_all('a', href=re.compile(r'tape-.*\.html\?pwd=$'))
+            page_urls = [self.url]  # Incluir a primeira página
+            for link in page_links:
+                page_url = link['href']
+                if page_url.startswith('/'):
+                    page_url = f"https://imgsrc.ru{page_url}"
+                if page_url not in page_urls:
+                    page_urls.append(page_url)
+
+            # Raspar cada página
+            for i, current_url in enumerate(page_urls, 1):
+                self.progress_signal.emit(f"Buscando página {i} ({current_url})...")
+                try:
+                    response = session.get(current_url, timeout=5)
+                    response.raise_for_status()
+                    soup = BeautifulSoup(response.text, 'html.parser')
+
+                    # Buscar imagens em <source> e <img>
+                    source_tags = soup.find_all('source', srcset=True)
+                    img_tags = soup.find_all('img', src=True)
+                    for tag in source_tags + img_tags:
+                        img_url = tag.get('srcset') or tag.get('src')
+                        if not img_url.lower().endswith('.webp'):  # Apenas .webp
+                            continue
+                        if img_url.startswith('//'):
+                            img_url = f"https:{img_url}"
+                        elif not img_url.startswith('http'):
+                            img_url = f"https://imgsrc.ru{img_url}"
+                        try:
+                            img_response = session.head(img_url, allow_redirects=True, timeout=3)
+                            size = int(img_response.headers.get('content-length', 0))
+                            if size >= self.min_size:
+                                image_urls.append((img_url, size))
+                        except requests.RequestException:
+                            continue
+                except requests.RequestException:
+                    self.progress_signal.emit(f"Erro na página {i}, continuando...")
+                    continue
+
+            self.result_signal.emit(image_urls)
+        except requests.RequestException as e:
+            self.error_signal.emit(f"Erro ao acessar URL: {e}")
 
 class ImageScraper(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Scraper")
         self.setGeometry(100, 100, 600, 400)
-        self.init_ui()
         self.image_urls = []
+        self.page_title = "album"
+        self.init_ui()
 
     def init_ui(self):
-        # Layout principal
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
 
         # Campo para URL
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Digite a URL (ex.: https://imgsrc.ru/.../tape-....html)")
+        self.url_input.setPlaceholderText("Digite a URL do tape (ex.: https://imgsrc.ru/.../tape-....html)")
         layout.addWidget(self.url_input)
 
         # Controle de tamanho mínimo
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("Tamanho mínimo (KB):"))
         self.size_input = QSpinBox()
-        self.size_input.setValue(10)  # Valor padrão: 10 KB
+        self.size_input.setValue(10)
         self.size_input.setRange(1, 10000)
         size_layout.addWidget(self.size_input)
         layout.addLayout(size_layout)
+
+        # Controle de conexões simultâneas
+        conn_layout = QHBoxLayout()
+        conn_layout.addWidget(QLabel("Conexões simultâneas:"))
+        self.conn_input = QSpinBox()
+        self.conn_input.setValue(5)
+        self.conn_input.setRange(1, 20)
+        conn_layout.addWidget(self.conn_input)
+        layout.addLayout(conn_layout)
+
+        # Checkbox para subpasta
+        self.subfolder_check = QCheckBox("Criar subpasta com título do álbum")
+        self.subfolder_check.setChecked(True)
+        layout.addWidget(self.subfolder_check)
 
         # Botão de busca
         self.search_btn = QPushButton("Search")
@@ -63,29 +151,37 @@ class ImageScraper(QMainWindow):
         self.result_list.clear()
         self.image_urls = []
         url = self.url_input.text()
-        min_size = self.size_input.value() * 1024  # Converter KB para bytes
+        if not url:
+            self.result_list.addItem("Digite uma URL válida!")
+            return
 
-        try:
-            response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            img_tags = soup.find_all('img', src=True)
+        self.search_btn.setEnabled(False)
+        self.result_list.addItem("Iniciando busca de imagens (.webp)...")
 
-            for img in img_tags:
-                img_url = img['src']
-                if not img_url.startswith('http'):
-                    img_url = f"https://imgsrc.ru{img_url}"
-                try:
-                    # Verificar tamanho da imagem
-                    img_response = requests.head(img_url, allow_redirects=True)
-                    size = int(img_response.headers.get('content-length', 0))
-                    if size >= min_size:
-                        self.image_urls.append(img_url)
-                        self.result_list.addItem(f"{img_url} ({size // 1024} KB)")
-                except requests.RequestException:
-                    continue
-        except requests.RequestException as e:
-            self.result_list.addItem(f"Erro ao acessar URL: {e}")
+        # Iniciar thread de busca
+        self.thread = ScraperThread(url, self.size_input.value())
+        self.thread.result_signal.connect(self.display_results)
+        self.thread.error_signal.connect(self.display_error)
+        self.thread.title_signal.connect(self.set_page_title)
+        self.thread.progress_signal.connect(self.result_list.addItem)
+        self.thread.finished.connect(self.search_finished)
+        self.thread.start()
+
+    def set_page_title(self, title):
+        self.page_title = title
+
+    def display_results(self, image_urls):
+        self.image_urls = [url for url, _ in image_urls]
+        for url, size in image_urls:
+            self.result_list.addItem(f"{url} ({size // 1024} KB)")
+
+    def display_error(self, error_msg):
+        self.result_list.addItem(error_msg)
+
+    def search_finished(self):
+        self.search_btn.setEnabled(True)
+        if not self.image_urls:
+            self.result_list.addItem("Nenhuma imagem .webp encontrada!")
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
@@ -101,13 +197,24 @@ class ImageScraper(QMainWindow):
             self.result_list.addItem("Nenhuma imagem para baixar!")
             return
 
-        for url in self.image_urls:
+        dest_folder = folder
+        if self.subfolder_check.isChecked():
+            dest_folder = os.path.join(folder, self.page_title)
+            os.makedirs(dest_folder, exist_ok=True)
+
+        def download_single_image(url):
             try:
-                filename = os.path.join(folder, url.split('/')[-1])
+                filename = os.path.join(dest_folder, url.split('/')[-1])
                 urllib.request.urlretrieve(url, filename)
-                self.result_list.addItem(f"Baixado: {filename}")
+                return f"Baixado: {filename}"
             except Exception as e:
-                self.result_list.addItem(f"Erro ao baixar {url}: {e}")
+                return f"Erro ao baixar {url}: {e}"
+
+        max_workers = self.conn_input.value()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = executor.map(download_single_image, self.image_urls)
+            for result in results:
+                self.result_list.addItem(result)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
