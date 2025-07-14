@@ -15,6 +15,7 @@ class ScraperThread(QThread):
     error_signal = pyqtSignal(str)
     title_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(str)
+    user_signal = pyqtSignal(str)
 
     def __init__(self, url, min_size):
         super().__init__()
@@ -26,6 +27,11 @@ class ScraperThread(QThread):
             session = requests.Session()
             session.headers.update({'User-Agent': 'Mozilla/5.0'})
             image_urls = []
+
+            # Extrair nome do usuário da URL
+            user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', self.url)
+            user_name = user_match.group(1) if user_match else "unknown_user"
+            self.user_signal.emit(user_name)
 
             response = session.get(self.url, timeout=5)
             response.raise_for_status()
@@ -92,6 +98,7 @@ class ImageScraper(QMainWindow):
         self.setGeometry(100, 100, 600, 400)
         self.image_urls = []
         self.page_title = "album"
+        self.user_name = "unknown_user"
         self.init_ui()
 
     def init_ui(self):
@@ -118,6 +125,10 @@ class ImageScraper(QMainWindow):
         self.conn_input.setRange(1, 20)
         conn_layout.addWidget(self.conn_input)
         layout.addLayout(conn_layout)
+
+        self.user_folder_check = QCheckBox("Criar pasta de usuário")
+        self.user_folder_check.setChecked(False)
+        layout.addWidget(self.user_folder_check)
 
         self.subfolder_check = QCheckBox("Criar subpasta com título do álbum")
         self.subfolder_check.setChecked(True)
@@ -158,12 +169,16 @@ class ImageScraper(QMainWindow):
         self.thread.result_signal.connect(self.display_results)
         self.thread.error_signal.connect(self.display_error)
         self.thread.title_signal.connect(self.set_page_title)
+        self.thread.user_signal.connect(self.set_user_name)
         self.thread.progress_signal.connect(self.result_list.addItem)
         self.thread.finished.connect(self.search_finished)
         self.thread.start()
 
     def set_page_title(self, title):
         self.page_title = title
+
+    def set_user_name(self, user):
+        self.user_name = user
 
     def display_results(self, image_urls):
         self.image_urls = [url for url, _ in image_urls]
@@ -193,14 +208,23 @@ class ImageScraper(QMainWindow):
             return
 
         dest_folder = folder
+        if self.user_folder_check.isChecked():
+            try:
+                dest_folder = os.path.join(folder, self.user_name)
+                os.makedirs(dest_folder, exist_ok=True)
+                self.result_list.addItem(f"Pasta de usuário criada: {dest_folder}")
+            except Exception as e:
+                self.result_list.addItem(f"Erro ao criar pasta de usuário '{self.user_name}': {e}. Usando pasta raiz.")
+                dest_folder = folder
+
         if self.subfolder_check.isChecked():
             try:
-                dest_folder = os.path.join(folder, self.page_title)
+                dest_folder = os.path.join(dest_folder, self.page_title)
                 os.makedirs(dest_folder, exist_ok=True)
                 self.result_list.addItem(f"Subpasta criada: {dest_folder}")
             except Exception as e:
-                self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}. Usando pasta raiz.")
-                dest_folder = folder
+                self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}. Usando pasta anterior.")
+                # Mantém dest_folder como pasta do usuário ou raiz
 
         def download_single_image(url):
             try:
