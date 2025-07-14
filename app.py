@@ -163,7 +163,7 @@ class ImageScraper(QMainWindow):
             return
 
         self.search_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando busca de imagens (.webp)...")
+        self.result_list.addItem("Iniciando busca de imagens WebP e GIF...")
 
         self.thread = ScraperThread(url, self.size_input.value())
         self.thread.result_signal.connect(self.display_results)
@@ -191,7 +191,7 @@ class ImageScraper(QMainWindow):
     def search_finished(self):
         self.search_btn.setEnabled(True)
         if not self.image_urls:
-            self.result_list.addItem("Nenhuma imagem .webp encontrada!")
+            self.result_list.addItem("Nenhuma imagem WebP ou GIF encontrada!")
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
