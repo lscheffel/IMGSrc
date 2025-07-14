@@ -32,16 +32,34 @@ class ScraperThread(QThread):
             session.headers.update({'User-Agent': 'Mozilla/5.0'})
             image_urls = []
 
-            # Extrair nome do usuário da URL
-            user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', self.url)
-            user_name = user_match.group(1) if user_match else "unknown_user"
-            self.user_signal.emit(user_name)
-
+            # Acessar página da galeria para encontrar o link do tape
             response = session.get(self.url, timeout=5)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Extrair título
+            # Encontrar link do tape usando padrão no href
+            tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
+            if not tape_link:
+                self.error_signal.emit("Link do tape não encontrado na página da galeria.")
+                return
+            tape_url = tape_link['href']
+            if tape_url.startswith('/'):
+                tape_url = f"https://imgsrc.ru{tape_url}"
+            elif not tape_url.startswith('http'):
+                tape_url = f"https://imgsrc.ru/{tape_url}"
+            self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
+
+            # Acessar página do tape para extrair usuário e título
+            response = session.get(tape_url, timeout=5)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # Extrair nome do usuário da URL do tape
+            user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', tape_url)
+            user_name = user_match.group(1) if user_match else "unknown_user"
+            self.user_signal.emit(user_name)
+
+            # Extrair título da página do tape
             title_tag = soup.find('title')
             page_title = title_tag.text.split(' @')[0] if title_tag else ""
             page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
@@ -53,8 +71,8 @@ class ScraperThread(QThread):
             self.progress_signal.emit(f"Título da subpasta: {page_title}")
 
             # Extrair URLs das páginas do tape
+            page_urls = [tape_url]
             page_links = soup.find_all('a', href=re.compile(r'tape-.*\.html\?pwd=$'))
-            page_urls = [self.url]
             for link in page_links:
                 page_url = link['href']
                 if page_url.startswith('/'):
@@ -74,7 +92,7 @@ class ScraperThread(QThread):
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith('.webp'):
+                        if not img_url.lower().endswith(('.gif', '.webp')):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -200,7 +218,7 @@ class ImageScraper(QMainWindow):
         main_layout = QVBoxLayout(main_tab)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Digite a URL do tape (ex.: https://imgsrc.ru/.../tape-....html)")
+        self.url_input.setPlaceholderText("Digite a URL da galeria (ex.: https://imgsrc.ru/.../84647553.html)")
         main_layout.addWidget(self.url_input)
 
         size_layout = QHBoxLayout()
@@ -234,6 +252,10 @@ class ImageScraper(QMainWindow):
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.search_images)
         main_layout.addWidget(self.search_btn)
+
+        self.one_click_btn = QPushButton("One Click!")
+        self.one_click_btn.clicked.connect(self.one_click)
+        main_layout.addWidget(self.one_click_btn)
 
         self.result_list = QListWidget()
         main_layout.addWidget(self.result_list)
@@ -285,7 +307,8 @@ class ImageScraper(QMainWindow):
             return
 
         self.search_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando busca de imagens (.webp)...")
+        self.one_click_btn.setEnabled(False)
+        self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
         self.sync_folders()
 
         self.thread = ScraperThread(url, self.size_input.value())
@@ -313,8 +336,9 @@ class ImageScraper(QMainWindow):
 
     def search_finished(self):
         self.search_btn.setEnabled(True)
+        self.one_click_btn.setEnabled(True)
         if not self.image_urls:
-            self.result_list.addItem("Nenhuma imagem .webp encontrada!")
+            self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
@@ -347,7 +371,7 @@ class ImageScraper(QMainWindow):
         except sqlite3.Error as e:
             self.result_list.addItem(f"Erro ao atualizar histórico: {e}")
 
-    def download_images(self):
+    def download_images(self, force_user_folder=False, force_subfolder=False, force_overwrite=False):
         folder = self.folder_input.text()
         if not folder:
             self.result_list.addItem("Selecione uma pasta de destino!")
@@ -357,7 +381,7 @@ class ImageScraper(QMainWindow):
             return
 
         dest_folder = folder
-        if self.user_folder_check.isChecked():
+        if force_user_folder or self.user_folder_check.isChecked():
             try:
                 dest_folder = os.path.join(folder, self.user_name)
                 os.makedirs(dest_folder, exist_ok=True)
@@ -366,7 +390,7 @@ class ImageScraper(QMainWindow):
                 self.result_list.addItem(f"Erro ao criar pasta de usuário '{self.user_name}': {e}. Usando pasta raiz.")
                 dest_folder = folder
 
-        if self.subfolder_check.isChecked():
+        if force_subfolder or self.subfolder_check.isChecked():
             try:
                 dest_folder = os.path.join(dest_folder, self.page_title)
                 os.makedirs(dest_folder, exist_ok=True)
@@ -382,7 +406,7 @@ class ImageScraper(QMainWindow):
         try:
             for url in self.image_urls:
                 url_hash = hashlib.md5(url.encode()).hexdigest()
-                if not self.overwrite_check.isChecked() and (
+                if not (force_overwrite or self.overwrite_check.isChecked()) and (
                     url_hash in self.downloaded_urls_set or
                     (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
                 ):
@@ -432,6 +456,37 @@ class ImageScraper(QMainWindow):
 
         self.update_history_view()
         self.sync_folders()
+
+    def one_click(self):
+        self.result_list.clear()
+        self.image_urls = []
+        url = self.url_input.text()
+        if not url:
+            self.result_list.addItem("Digite uma URL válida!")
+            return
+        if not self.folder_input.text():
+            self.result_list.addItem("Selecione uma pasta de destino!")
+            return
+
+        self.search_btn.setEnabled(False)
+        self.one_click_btn.setEnabled(False)
+        self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
+        self.sync_folders()
+
+        self.thread = ScraperThread(url, self.size_input.value())
+        self.thread.result_signal.connect(lambda image_urls: self.one_click_download(image_urls))
+        self.thread.error_signal.connect(self.display_error)
+        self.thread.title_signal.connect(self.set_page_title)
+        self.thread.user_signal.connect(self.set_user_name)
+        self.thread.progress_signal.connect(self.result_list.addItem)
+        self.thread.finished.connect(self.search_finished)
+        self.thread.start()
+
+    def one_click_download(self, image_urls):
+        self.display_results(image_urls)
+        if self.image_urls:
+            self.download_images(force_user_folder=True, force_subfolder=True, force_overwrite=True)
+        self.search_finished()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
