@@ -70,7 +70,7 @@ class ScraperThread(QThread):
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith('.webp'):
+                        if not img_url.lower().endswith(('.webp', '.gif')):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
