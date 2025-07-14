@@ -74,7 +74,7 @@ class ScraperThread(QThread):
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith(('.gif','.webp')):
+                        if not img_url.lower().endswith('.webp'):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -137,42 +137,54 @@ class ImageScraper(QMainWindow):
 
     def load_cache(self):
         self.downloaded_urls_set = set()
-        self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active"')
-        for row in self.cursor.fetchall():
-            self.downloaded_urls_set.add(row[0])
+        try:
+            self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active"')
+            for row in self.cursor.fetchall():
+                self.downloaded_urls_set.add(row[0])
+        except sqlite3.Error as e:
+            print(f"Erro ao carregar cache do SQLite: {e}")
 
     def sync_folders(self):
-        self.cursor.execute('SELECT url, path FROM downloads WHERE status="active"')
-        for url, path in self.cursor.fetchall():
-            if not os.path.exists(path):
-                url_hash = hashlib.md5(url.encode()).hexdigest()
-                self.cursor.execute('UPDATE downloads SET status="deleted" WHERE url_hash=?', (url_hash,))
-                if self.redis_client:
-                    self.redis_client.srem('downloaded_urls', url_hash)
-        self.conn.commit()
-        self.load_cache()
+        try:
+            self.cursor.execute('SELECT url, path FROM downloads WHERE status="active"')
+            for url, path in self.cursor.fetchall():
+                if not os.path.exists(path):
+                    url_hash = hashlib.md5(url.encode()).hexdigest()
+                    self.cursor.execute('UPDATE downloads SET status="deleted" WHERE url_hash=?', (url_hash,))
+                    if self.redis_client:
+                        self.redis_client.srem('downloaded_urls', url_hash)
+            self.conn.commit()
+            self.load_cache()
+        except sqlite3.Error as e:
+            self.result_list.addItem(f"Erro ao sincronizar pastas: {e}")
 
     def clear_history(self):
         reply = QMessageBox.question(self, 'Limpar Histórico', 'Deseja limpar todo o histórico de downloads?',
                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
-            self.cursor.execute('DELETE FROM downloads')
-            self.conn.commit()
-            if self.redis_client:
-                self.redis_client.flushdb()
-            self.downloaded_urls_set.clear()
-            self.result_list.addItem("Histórico limpo com sucesso.")
-            self.update_history_view()
+            try:
+                self.cursor.execute('DELETE FROM downloads')
+                self.conn.commit()
+                if self.redis_client:
+                    self.redis_client.flushdb()
+                self.downloaded_urls_set.clear()
+                self.result_list.addItem("Histórico limpo com sucesso.")
+                self.update_history_view()
+            except sqlite3.Error as e:
+                self.result_list.addItem(f"Erro ao limpar histórico: {e}")
 
     def export_history(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Salvar Histórico", "", "CSV Files (*.csv)")
         if file_path:
-            self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write('filename,user,url,download_date,path,status\n')
-                for row in self.cursor.fetchall():
-                    f.write(','.join(str(x) for x in row) + '\n')
-            self.result_list.addItem(f"Histórico exportado para: {file_path}")
+            try:
+                self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write('filename,user,url,download_date,path,status\n')
+                    for row in self.cursor.fetchall():
+                        f.write(','.join(str(x).replace(',', '') for x in row) + '\n')
+                self.result_list.addItem(f"Histórico exportado para: {file_path}")
+            except (sqlite3.Error, OSError) as e:
+                self.result_list.addItem(f"Erro ao exportar histórico: {e}")
 
     def init_ui(self):
         main_widget = QWidget()
@@ -310,27 +322,30 @@ class ImageScraper(QMainWindow):
             self.folder_input.setText(folder)
 
     def update_history_view(self):
-        self.history_table.setRowCount(0)
-        self.cursor.execute('SELECT DISTINCT user, path FROM downloads WHERE status="active"')
-        galleries = set()
-        for user, path in self.cursor.fetchall():
-            album = os.path.basename(os.path.dirname(path)) if self.subfolder_check.isChecked() else os.path.basename(path)
-            galleries.add(f"{user} - {album}")
+        try:
+            self.history_table.setRowCount(0)
+            self.cursor.execute('SELECT DISTINCT user, path FROM downloads WHERE status="active"')
+            galleries = set()
+            for user, path in self.cursor.fetchall():
+                album = os.path.basename(os.path.dirname(path)) if self.subfolder_check.isChecked() else os.path.basename(path)
+                galleries.add(f"{user} - {album}")
 
-        self.cursor.execute('SELECT COUNT(*) FROM downloads')
-        total_rows = len(galleries) + self.cursor.fetchone()[0]
-        self.history_table.setRowCount(total_rows)
-        row = 0
-        for gallery in sorted(galleries):
-            self.history_table.setItem(row, 0, QTableWidgetItem(gallery))
-            row += 1
+            self.cursor.execute('SELECT COUNT(*) FROM downloads')
+            total_rows = len(galleries) + self.cursor.fetchone()[0]
+            self.history_table.setRowCount(total_rows)
+            row = 0
+            for gallery in sorted(galleries):
+                self.history_table.setItem(row, 0, QTableWidgetItem(gallery))
+                row += 1
 
-        self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
-        for record in self.cursor.fetchall():
-            for col, value in enumerate(record):
-                self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
-            row += 1
-        self.history_table.resizeColumnsToContents()
+            self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
+            for record in self.cursor.fetchall():
+                for col, value in enumerate(record):
+                    self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
+                row += 1
+            self.history_table.resizeColumnsToContents()
+        except sqlite3.Error as e:
+            self.result_list.addItem(f"Erro ao atualizar histórico: {e}")
 
     def download_images(self):
         folder = self.folder_input.text()
@@ -358,18 +373,29 @@ class ImageScraper(QMainWindow):
                 self.result_list.addItem(f"Subpasta criada: {dest_folder}")
             except Exception as e:
                 self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}. Usando pasta anterior.")
-                # Mantém dest_folder como pasta do usuário ou raiz
 
         self.result_list.addItem(f"Estrutura criada: {dest_folder}")
 
+        # Verificar duplicatas na thread principal
+        urls_to_download = []
+        skip_messages = []
+        try:
+            for url in self.image_urls:
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                if not self.overwrite_check.isChecked() and (
+                    url_hash in self.downloaded_urls_set or
+                    (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
+                ):
+                    self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
+                    date = self.cursor.fetchone()
+                    skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
+                else:
+                    urls_to_download.append(url)
+        except sqlite3.Error as e:
+            self.result_list.addItem(f"Erro ao verificar duplicatas: {e}")
+            return
+
         def download_single_image(url):
-            url_hash = hashlib.md5(url.encode()).hexdigest()
-            if not self.overwrite_check.isChecked() and (url_hash in self.downloaded_urls_set or
-                                                        (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))):
-                self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
-                date = self.cursor.fetchone()
-                return url, None, f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})"
-            
             try:
                 filename = os.path.join(dest_folder, url.split('/')[-1])
                 urllib.request.urlretrieve(url, filename)
@@ -377,23 +403,32 @@ class ImageScraper(QMainWindow):
             except Exception as e:
                 return url, None, f"Erro ao baixar {url}: {e}"
 
+        # Executar downloads
         max_workers = self.conn_input.value()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(download_single_image, self.image_urls))
-        
-        # Processar resultados na thread principal
-        for url, filename, message in results:
+            results = list(executor.map(download_single_image, urls_to_download))
+
+        # Exibir mensagens de skip
+        for message in skip_messages:
             self.result_list.addItem(message)
-            if filename:
-                url_hash = hashlib.md5(url.encode()).hexdigest()
-                self.cursor.execute('''
-                    INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (os.path.basename(filename), self.user_name, url, url_hash, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
-                self.conn.commit()
-                if self.redis_client:
-                    self.redis_client.sadd('downloaded_urls', url_hash)
-                self.downloaded_urls_set.add(url_hash)
+
+        # Processar resultados na thread principal
+        try:
+            for url, filename, message in results:
+                self.result_list.addItem(message)
+                if filename:
+                    url_hash = hashlib.md5(url.encode()).hexdigest()
+                    self.cursor.execute('''
+                        INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (os.path.basename(filename), self.user_name, url, url_hash, 
+                          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
+                    self.conn.commit()
+                    if self.redis_client:
+                        self.redis_client.sadd('downloaded_urls', url_hash)
+                    self.downloaded_urls_set.add(url_hash)
+        except sqlite3.Error as e:
+            self.result_list.addItem(f"Erro ao registrar downloads: {e}")
 
         self.update_history_view()
         self.sync_folders()
