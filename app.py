@@ -49,7 +49,7 @@ class ScraperThread(QThread):
                 tape_url = f"https://imgsrc.ru/{tape_url}"
             self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
 
-            # Acessar página do tape para extrair usuário e título
+            # Acessar página do tape para extrair usuário, título e imagens
             response = session.get(tape_url, timeout=5)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -88,11 +88,14 @@ class ScraperThread(QThread):
                     response.raise_for_status()
                     soup = BeautifulSoup(response.text, 'html.parser')
 
+                    # Buscar imagens em <source> e <img>
                     source_tags = soup.find_all('source', srcset=True)
                     img_tags = soup.find_all('img', src=True)
                     for tag in source_tags + img_tags:
                         img_url = tag.get('srcset') or tag.get('src')
-                        if not img_url.lower().endswith(('.gif', '.webp', '.jpg', '.jpeg')):
+                        if not img_url:
+                            continue
+                        if not img_url.lower().endswith(('.gif', '.webp')):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -218,7 +221,7 @@ class ImageScraper(QMainWindow):
         main_layout = QVBoxLayout(main_tab)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Digite URLs de galerias (ex.: https://imgsrc.ru/.../84647553.html, separadas por vírgula)")
+        self.url_input.setPlaceholderText("Digite URLs de galerias (ex.: https://imgsrc.ru/.../79781003.html, separadas por vírgula)")
         main_layout.addWidget(self.url_input)
 
         size_layout = QHBoxLayout()
@@ -308,7 +311,7 @@ class ImageScraper(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
+        self.result_list.addItem("Iniciando busca de imagens (.webp, .gif, .jpg, .jpeg)...")
         self.sync_folders()
 
         # Separar URLs por vírgula
@@ -369,7 +372,7 @@ class ImageScraper(QMainWindow):
                 self.search_btn.setEnabled(True)
                 self.one_click_btn.setEnabled(True)
                 if not self.image_urls:
-                    self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
+                    self.result_list.addItem("Nenhuma imagem .webp, .gif, .jpg ou .jpeg encontrada!")
                 del self.threads
 
     def select_folder(self):
@@ -507,7 +510,7 @@ class ImageScraper(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
+        self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif, .jpg, .jpeg)...")
         self.sync_folders()
 
         # Separar URLs por vírgula
