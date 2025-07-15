@@ -15,7 +15,7 @@ import redis
 import hashlib
 
 class ScraperThread(QThread):
-    result_signal = pyqtSignal(list)
+    result_signal = pyqtSignal(list, str)  # Inclui URL da página
     error_signal = pyqtSignal(str)
     title_signal = pyqtSignal(str)
     user_signal = pyqtSignal(str)
@@ -31,19 +31,15 @@ class ScraperThread(QThread):
         try:
             session = requests.Session()
             session.headers.update({'User-Agent': 'Mozilla/5.0'})
-            image_urls = []
 
             # Determinar URL do tape
             if self.scrape_tape_directly:
                 tape_url = self.url
                 self.progress_signal.emit(f"Usando URL do tape diretamente: {tape_url}")
             else:
-                # Acessar página da galeria para encontrar o link do tape
                 response = session.get(self.url, timeout=5)
                 response.raise_for_status()
                 soup = BeautifulSoup(response.text, 'html.parser')
-
-                # Encontrar link do tape usando padrão no href
                 tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
                 if not tape_link:
                     self.error_signal.emit(f"Link do tape não encontrado na página da galeria: {self.url}")
@@ -55,17 +51,17 @@ class ScraperThread(QThread):
                     tape_url = f"https://imgsrc.ru/{tape_url}"
                 self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
 
-            # Acessar página do tape para extrair usuário, título e imagens
+            # Acessar página do tape para extrair usuário e título
             response = session.get(tape_url, timeout=5)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Extrair nome do usuário da URL do tape
+            # Extrair nome do usuário
             user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', tape_url)
             user_name = user_match.group(1) if user_match else "unknown_user"
             self.user_signal.emit(user_name)
 
-            # Extrair título da página do tape
+            # Extrair título
             title_tag = soup.find('title')
             page_title = title_tag.text.split(' @')[0] if title_tag else ""
             page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
@@ -78,7 +74,6 @@ class ScraperThread(QThread):
 
             # Extrair URLs das páginas do tape
             page_urls = [tape_url]
-            # Buscar links no <div> com padrão tape-.*\.html\?pwd=
             page_links = soup.find_all('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html\?pwd='))
             for link in page_links:
                 page_url = link['href']
@@ -86,23 +81,23 @@ class ScraperThread(QThread):
                     page_url = f"https://imgsrc.ru{page_url}"
                 if page_url not in page_urls:
                     page_urls.append(page_url)
+            self.progress_signal.emit(f"Páginas do tape encontradas: {len(page_urls)}")
 
-            # Raspar cada página
+            # Processar cada página sequencialmente
             for i, current_url in enumerate(page_urls, 1):
                 self.progress_signal.emit(f"Buscando página {i} ({current_url})...")
+                image_urls = []
                 try:
                     response = session.get(current_url, timeout=5)
                     response.raise_for_status()
                     soup = BeautifulSoup(response.text, 'html.parser')
 
-                    # Buscar imagens em <source> e <img>
-                    source_tags = soup.find_all('source', srcset=True)
-                    img_tags = soup.find_all('img', src=True)
-                    for tag in source_tags + img_tags:
-                        img_url = tag.get('srcset') or tag.get('src')
+                    # Buscar imagens em <source> com .webp
+                    source_tags = soup.find_all('source', srcset=re.compile(r'\.webp$'))
+                    page_image_count = 0
+                    for tag in source_tags:
+                        img_url = tag.get('srcset')
                         if not img_url:
-                            continue
-                        if not img_url.lower().endswith(('.gif', '.webp')):
                             continue
                         if img_url.startswith('//'):
                             img_url = f"https:{img_url}"
@@ -113,13 +108,15 @@ class ScraperThread(QThread):
                             size = int(img_response.headers.get('content-length', 0))
                             if size >= self.min_size:
                                 image_urls.append((img_url, size))
+                                page_image_count += 1
                         except requests.RequestException:
                             continue
+                    self.progress_signal.emit(f"Imagens .webp encontradas na página {i}: {page_image_count}")
+                    # Emitir imagens encontradas na página
+                    self.result_signal.emit(image_urls, current_url)
                 except requests.RequestException:
                     self.progress_signal.emit(f"Erro na página {i}, continuando...")
-                    continue
 
-            self.result_signal.emit(image_urls)
         except requests.RequestException as e:
             self.error_signal.emit(f"Erro ao acessar URL: {e}")
 
@@ -132,6 +129,7 @@ class ImageScraper(QMainWindow):
         self.page_title = "album"
         self.user_name = "unknown_user"
         self.downloaded_urls_set = set()
+        self.image_urls_dict = {}  # Cache por URL do tape
         self.init_db()
         self.init_redis()
         self.load_cache()
@@ -219,11 +217,9 @@ class ImageScraper(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
 
-        # Abas
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
 
-        # Aba principal
         main_tab = QWidget()
         main_layout = QVBoxLayout(main_tab)
 
@@ -289,7 +285,6 @@ class ImageScraper(QMainWindow):
 
         self.tabs.addTab(main_tab, "Busca e Download")
 
-        # Aba de histórico
         history_tab = QWidget()
         history_layout = QVBoxLayout(history_tab)
 
@@ -315,6 +310,7 @@ class ImageScraper(QMainWindow):
     def search_images(self):
         self.result_list.clear()
         self.image_urls = []
+        self.image_urls_dict = {}
         urls_input = self.url_input.text().strip()
         if not urls_input:
             self.result_list.addItem("Digite pelo menos uma URL válida!")
@@ -322,10 +318,9 @@ class ImageScraper(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando busca de imagens (.webp, .gif, .jpg, .jpeg)...")
+        self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
         self.sync_folders()
 
-        # Separar URLs por vírgula
         urls = [url.strip() for url in urls_input.split(',') if url.strip()]
         if not urls:
             self.result_list.addItem("Nenhuma URL válida fornecida!")
@@ -333,57 +328,51 @@ class ImageScraper(QMainWindow):
             self.one_click_btn.setEnabled(True)
             return
 
-        # Processar cada URL
         for url in urls:
             self.result_list.addItem(f"Processando: {url}")
             thread = ScraperThread(url, self.size_input.value(), self.tape_direct_check.isChecked())
-            thread.result_signal.connect(lambda image_urls, u=url: self.display_results(image_urls, u))
+            thread.result_signal.connect(lambda image_urls, page_url, u=url: self.display_results(image_urls, page_url, u))
             thread.error_signal.connect(self.display_error)
             thread.title_signal.connect(lambda title, u=url: self.set_page_title(title, u))
             thread.user_signal.connect(lambda user, u=url: self.set_user_name(user, u))
             thread.progress_signal.connect(self.result_list.addItem)
             thread.finished.connect(self.search_finished)
             thread.start()
-            # Armazenar thread para evitar garbage collection
             if not hasattr(self, 'threads'):
                 self.threads = []
             self.threads.append(thread)
 
     def set_page_title(self, title, url):
-        # Armazenar título por URL
         if not hasattr(self, 'titles'):
             self.titles = {}
         self.titles[url] = title
-        self.page_title = title  # Para compatibilidade com download
+        self.page_title = title
 
     def set_user_name(self, user, url):
-        # Armazenar usuário por URL
         if not hasattr(self, 'users'):
             self.users = {}
         self.users[url] = user
-        self.user_name = user  # Para compatibilidade com download
+        self.user_name = user
 
-    def display_results(self, image_urls, url):
-        # Armazenar URLs de imagens por galeria
-        if not hasattr(self, 'image_urls_dict'):
-            self.image_urls_dict = {}
-        self.image_urls_dict[url] = [img_url for img_url, _ in image_urls]
+    def display_results(self, image_urls, page_url, gallery_url):
+        if not self.image_urls_dict.get(gallery_url):
+            self.image_urls_dict[gallery_url] = []
+        self.image_urls_dict[gallery_url].extend([img_url for img_url, _ in image_urls])
         self.image_urls.extend([img_url for img_url, _ in image_urls])
         for img_url, size in image_urls:
-            self.result_list.addItem(f"{url}: {img_url} ({size // 1024} KB)")
+            self.result_list.addItem(f"{page_url}: {img_url} ({size // 1024} KB)")
 
     def display_error(self, error_msg):
         self.result_list.addItem(error_msg)
 
     def search_finished(self):
-        # Verificar se todas as threads terminaram
         if hasattr(self, 'threads'):
             self.threads = [t for t in self.threads if t.isRunning()]
             if not self.threads:
                 self.search_btn.setEnabled(True)
                 self.one_click_btn.setEnabled(True)
                 if not self.image_urls:
-                    self.result_list.addItem("Nenhuma imagem .webp, .gif, .jpg ou .jpeg encontrada!")
+                    self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
                 del self.threads
 
     def select_folder(self):
@@ -426,8 +415,7 @@ class ImageScraper(QMainWindow):
             self.result_list.addItem("Nenhuma imagem para baixar!")
             return
 
-        # Processar imagens por URL da galeria
-        for gallery_url in getattr(self, 'image_urls_dict', {}):
+        for gallery_url in self.image_urls_dict:
             user_name = self.users.get(gallery_url, "unknown_user")
             page_title = self.titles.get(gallery_url, f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
@@ -451,7 +439,6 @@ class ImageScraper(QMainWindow):
 
             self.result_list.addItem(f"Estrutura criada para {gallery_url}: {dest_folder}")
 
-            # Verificar duplicatas na thread principal
             urls_to_download = []
             skip_messages = []
             try:
@@ -478,16 +465,13 @@ class ImageScraper(QMainWindow):
                 except Exception as e:
                     return url, None, f"Erro ao baixar {url}: {e}"
 
-            # Executar downloads
             max_workers = self.conn_input.value()
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 results = list(executor.map(download_single_image, urls_to_download))
 
-            # Exibir mensagens de skip
             for message in skip_messages:
                 self.result_list.addItem(message)
 
-            # Processar resultados na thread principal
             try:
                 for url, filename, message in results:
                     self.result_list.addItem(message)
@@ -511,6 +495,7 @@ class ImageScraper(QMainWindow):
     def one_click(self):
         self.result_list.clear()
         self.image_urls = []
+        self.image_urls_dict = {}
         urls_input = self.url_input.text().strip()
         if not urls_input:
             self.result_list.addItem("Digite pelo menos uma URL válida!")
@@ -521,10 +506,9 @@ class ImageScraper(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
-        self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif, .jpg, .jpeg)...")
+        self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
         self.sync_folders()
 
-        # Separar URLs por vírgula
         urls = [url.strip() for url in urls_input.split(',') if url.strip()]
         if not urls:
             self.result_list.addItem("Nenhuma URL válida fornecida!")
@@ -532,27 +516,24 @@ class ImageScraper(QMainWindow):
             self.one_click_btn.setEnabled(True)
             return
 
-        # Processar cada URL
         for url in urls:
             self.result_list.addItem(f"Processando: {url}")
             thread = ScraperThread(url, self.size_input.value(), self.tape_direct_check.isChecked())
-            thread.result_signal.connect(lambda image_urls, u=url: self.one_click_download(image_urls, u))
+            thread.result_signal.connect(lambda image_urls, page_url, u=url: self.one_click_download(image_urls, page_url, u))
             thread.error_signal.connect(self.display_error)
             thread.title_signal.connect(lambda title, u=url: self.set_page_title(title, u))
             thread.user_signal.connect(lambda user, u=url: self.set_user_name(user, u))
             thread.progress_signal.connect(self.result_list.addItem)
             thread.finished.connect(self.search_finished)
             thread.start()
-            # Armazenar thread para evitar garbage collection
             if not hasattr(self, 'threads'):
                 self.threads = []
             self.threads.append(thread)
 
-    def one_click_download(self, image_urls, url):
-        self.display_results(image_urls, url)
-        if self.image_urls_dict.get(url):
+    def one_click_download(self, image_urls, page_url, gallery_url):
+        self.display_results(image_urls, page_url, gallery_url)
+        if self.image_urls_dict.get(gallery_url):
             self.download_images(force_user_folder=True, force_subfolder=True, force_overwrite=True)
-        self.search_finished()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
