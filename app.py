@@ -305,6 +305,7 @@ class ImageScraper(QMainWindow):
             self.load_cache()
         except sqlite3.Error as e:
             self.result_list.addItem(f"Erro ao sincronizar pastas: {e}")
+            self.result_list.scrollToBottom()
 
     def clear_history(self):
         if QMessageBox.question(self, 'Limpar Histórico', 'Deseja limpar todo o histórico de downloads?',
@@ -316,9 +317,11 @@ class ImageScraper(QMainWindow):
                     self.redis_client.flushdb()
                 self.downloaded_urls_set.clear()
                 self.result_list.addItem("Histórico limpo com sucesso.")
+                self.result_list.scrollToBottom()
                 self.update_history_view()
             except sqlite3.Error as e:
                 self.result_list.addItem(f"Erro ao limpar histórico: {e}")
+                self.result_list.scrollToBottom()
 
     def export_history(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Salvar Histórico", "", "CSV Files (*.csv)")
@@ -330,8 +333,10 @@ class ImageScraper(QMainWindow):
                     for row in self.cursor.fetchall():
                         f.write(','.join(str(x).replace(',', '') for x in row) + '\n')
                 self.result_list.addItem(f"Histórico exportado para: {file_path}")
+                self.result_list.scrollToBottom()
             except (sqlite3.Error, OSError) as e:
                 self.result_list.addItem(f"Erro ao exportar histórico: {e}")
+                self.result_list.scrollToBottom()
 
     def init_ui(self):
         main_widget = QWidget()
@@ -427,6 +432,7 @@ class ImageScraper(QMainWindow):
     def search_images(self):
         if self.scraper_thread and self.scraper_thread.isRunning():
             self.result_list.addItem("Aguarde a busca atual concluir!")
+            self.result_list.scrollToBottom()
             return
 
         self.result_list.clear()
@@ -434,12 +440,14 @@ class ImageScraper(QMainWindow):
         url = self.url_input.text()
         if not url:
             self.result_list.addItem("Digite uma URL válida!")
+            self.result_list.scrollToBottom()
             return
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
         self.download_btn.setEnabled(False)
         self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
+        self.result_list.scrollToBottom()
         self.sync_folders()
 
         self.scraper_thread = ScraperThread(url, self.size_input.value())
@@ -447,7 +455,7 @@ class ImageScraper(QMainWindow):
         self.scraper_thread.error_signal.connect(self.display_error)
         self.scraper_thread.title_signal.connect(self.set_page_title)
         self.scraper_thread.user_signal.connect(self.set_user_name)
-        self.scraper_thread.progress_signal.connect(self.result_list.addItem)
+        self.scraper_thread.progress_signal.connect(self.add_item_and_scroll)
         self.scraper_thread.finished.connect(self.search_finished)
         self.scraper_thread.start()
 
@@ -456,6 +464,10 @@ class ImageScraper(QMainWindow):
 
     def set_user_name(self, user):
         self.user_name = user
+
+    def add_item_and_scroll(self, message):
+        self.result_list.addItem(message)
+        self.result_list.scrollToBottom()
 
     def display_results(self, image_urls, total_images, discarded_images):
         self.image_urls = [url for url, _ in image_urls]
@@ -469,9 +481,11 @@ class ImageScraper(QMainWindow):
             f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
             f"Total processado: {total_images}"
         )
+        self.result_list.scrollToBottom()
 
     def display_error(self, error_msg):
         self.result_list.addItem(error_msg)
+        self.result_list.scrollToBottom()
 
     def search_finished(self):
         self.search_btn.setEnabled(True)
@@ -479,6 +493,7 @@ class ImageScraper(QMainWindow):
         self.download_btn.setEnabled(True)
         if not self.image_urls:
             self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
+            self.result_list.scrollToBottom()
         self.scraper_thread = None
 
     def select_folder(self):
@@ -509,14 +524,17 @@ class ImageScraper(QMainWindow):
             self.history_table.resizeColumnsToContents()
         except sqlite3.Error as e:
             self.result_list.addItem(f"Erro ao atualizar histórico: {e}")
+            self.result_list.scrollToBottom()
 
     def download_images(self, force_user_folder=False, force_subfolder=False, force_overwrite=False):
         folder = self.folder_input.text()
         if not folder:
             self.result_list.addItem("Selecione uma pasta de destino!")
+            self.result_list.scrollToBottom()
             return
         if not self.image_urls:
             self.result_list.addItem("Nenhuma imagem para baixar!")
+            self.result_list.scrollToBottom()
             return
 
         dest_folder = folder
@@ -525,8 +543,10 @@ class ImageScraper(QMainWindow):
                 dest_folder = os.path.join(folder, self.user_name)
                 os.makedirs(dest_folder, exist_ok=True)
                 self.result_list.addItem(f"Pasta de usuário criada: {dest_folder}")
+                self.result_list.scrollToBottom()
             except Exception as e:
                 self.result_list.addItem(f"Erro ao criar pasta de usuário '{self.user_name}': {e}")
+                self.result_list.scrollToBottom()
                 dest_folder = folder
 
         if force_subfolder or self.subfolder_check.isChecked():
@@ -534,13 +554,17 @@ class ImageScraper(QMainWindow):
                 dest_folder = os.path.join(dest_folder, self.page_title)
                 os.makedirs(dest_folder, exist_ok=True)
                 self.result_list.addItem(f"Subpasta criada: {dest_folder}")
+                self.result_list.scrollToBottom()
             except Exception as e:
                 self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}")
+                self.result_list.scrollToBottom()
 
         self.result_list.addItem(f"Estrutura criada: {dest_folder}")
+        self.result_list.scrollToBottom()
 
         if self.download_thread and self.download_thread.isRunning():
             self.result_list.addItem("Aguarde o download atual concluir!")
+            self.result_list.scrollToBottom()
             return
 
         self.download_btn.setEnabled(False)
@@ -548,7 +572,7 @@ class ImageScraper(QMainWindow):
             self.image_urls, dest_folder, self.user_name, self.downloaded_urls_set,
             self.redis_client, self.conn, self.cursor, self.conn_input.value(), force_overwrite or self.overwrite_check.isChecked()
         )
-        self.download_thread.progress_signal.connect(self.result_list.addItem)
+        self.download_thread.progress_signal.connect(self.add_item_and_scroll)
         self.download_thread.finished_signal.connect(self.download_finished)
         self.download_thread.start()
 
@@ -560,6 +584,7 @@ class ImageScraper(QMainWindow):
             f"Itens descartados (já baixados): {skipped}, "
             f"Erros: {errors}"
         )
+        self.result_list.scrollToBottom()
         self.update_history_view()
         self.sync_folders()
         self.download_btn.setEnabled(True)
@@ -568,6 +593,7 @@ class ImageScraper(QMainWindow):
     def one_click(self):
         if self.scraper_thread and self.scraper_thread.isRunning():
             self.result_list.addItem("Aguarde a busca atual concluir!")
+            self.result_list.scrollToBottom()
             return
 
         self.result_list.clear()
@@ -575,15 +601,18 @@ class ImageScraper(QMainWindow):
         url = self.url_input.text()
         if not url:
             self.result_list.addItem("Digite uma URL válida!")
+            self.result_list.scrollToBottom()
             return
         if not self.folder_input.text():
             self.result_list.addItem("Selecione uma pasta de destino!")
+            self.result_list.scrollToBottom()
             return
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
         self.download_btn.setEnabled(False)
         self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
+        self.result_list.scrollToBottom()
         self.sync_folders()
 
         self.scraper_thread = ScraperThread(url, self.size_input.value())
@@ -591,7 +620,7 @@ class ImageScraper(QMainWindow):
         self.scraper_thread.error_signal.connect(self.display_error)
         self.scraper_thread.title_signal.connect(self.set_page_title)
         self.scraper_thread.user_signal.connect(self.set_user_name)
-        self.scraper_thread.progress_signal.connect(self.result_list.addItem)
+        self.scraper_thread.progress_signal.connect(self.add_item_and_scroll)
         self.scraper_thread.finished.connect(self.search_finished)
         self.scraper_thread.start()
 
@@ -607,6 +636,7 @@ class ImageScraper(QMainWindow):
             f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
             f"Total processado: {total_images}"
         )
+        self.result_list.scrollToBottom()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
