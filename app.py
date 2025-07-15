@@ -13,6 +13,7 @@ from datetime import datetime
 import sqlite3
 import redis
 import hashlib
+import time
 
 class ScraperThread(QThread):
     result_signal = pyqtSignal(list, str)  # Inclui URL da página
@@ -26,6 +27,9 @@ class ScraperThread(QThread):
         self.url = url
         self.min_size = min_size * 1024
         self.scrape_tape_directly = scrape_tape_directly
+        self.max_retries = 3  # Máximo de tentativas
+        self.retry_delay = 3  # Segundos entre tentativas
+        self.images_per_page = 24  # Número esperado de imagens por página
 
     def run(self):
         try:
@@ -37,24 +41,42 @@ class ScraperThread(QThread):
                 tape_url = self.url
                 self.progress_signal.emit(f"Usando URL do tape diretamente: {tape_url}")
             else:
-                response = session.get(self.url, timeout=5)
-                response.raise_for_status()
-                soup = BeautifulSoup(response.text, 'html.parser')
-                tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
-                if not tape_link:
-                    self.error_signal.emit(f"Link do tape não encontrado na página da galeria: {self.url}")
-                    return
-                tape_url = tape_link['href']
-                if tape_url.startswith('/'):
-                    tape_url = f"https://imgsrc.ru{tape_url}"
-                elif not tape_url.startswith('http'):
-                    tape_url = f"https://imgsrc.ru/{tape_url}"
-                self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
+                for attempt in range(self.max_retries):
+                    try:
+                        response = session.get(self.url, timeout=5)
+                        response.raise_for_status()
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
+                        if not tape_link:
+                            self.error_signal.emit(f"Link do tape não encontrado na página da galeria: {self.url}")
+                            return
+                        tape_url = tape_link['href']
+                        if tape_url.startswith('/'):
+                            tape_url = f"https://imgsrc.ru{tape_url}"
+                        elif not tape_url.startswith('http'):
+                            tape_url = f"https://imgsrc.ru/{tape_url}"
+                        self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
+                        break
+                    except requests.RequestException as e:
+                        self.progress_signal.emit(f"Erro ao acessar galeria {self.url} (tentativa {attempt + 1}/{self.max_retries}): {e}")
+                        if attempt + 1 == self.max_retries:
+                            self.error_signal.emit(f"Falha após {self.max_retries} tentativas: {self.url}")
+                            return
+                        time.sleep(self.retry_delay)
 
             # Acessar página do tape para extrair usuário e título
-            response = session.get(tape_url, timeout=5)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
+            for attempt in range(self.max_retries):
+                try:
+                    response = session.get(tape_url, timeout=5)
+                    response.raise_for_status()
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    break
+                except requests.RequestException as e:
+                    self.progress_signal.emit(f"Erro ao acessar tape {tape_url} (tentativa {attempt + 1}/{self.max_retries}): {e}")
+                    if attempt + 1 == self.max_retries:
+                        self.error_signal.emit(f"Falha após {self.max_retries} tentativas: {tape_url}")
+                        return
+                    time.sleep(self.retry_delay)
 
             # Extrair nome do usuário
             user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', tape_url)
@@ -85,37 +107,62 @@ class ScraperThread(QThread):
 
             # Processar cada página sequencialmente
             for i, current_url in enumerate(page_urls, 1):
+                is_last_page = i == len(page_urls)  # Última página pode ter menos de 24 imagens
                 self.progress_signal.emit(f"Buscando página {i} ({current_url})...")
                 image_urls = []
-                try:
-                    response = session.get(current_url, timeout=5)
-                    response.raise_for_status()
-                    soup = BeautifulSoup(response.text, 'html.parser')
+                for attempt in range(self.max_retries):
+                    try:
+                        response = session.get(current_url, timeout=5)
+                        response.raise_for_status()
+                        soup = BeautifulSoup(response.text, 'html.parser')
 
-                    # Buscar imagens em <source> com .webp
-                    source_tags = soup.find_all('source', srcset=re.compile(r'\.webp$'))
-                    page_image_count = 0
-                    for tag in source_tags:
-                        img_url = tag.get('srcset')
-                        if not img_url:
+                        # Buscar imagens em <source> com .webp
+                        source_tags = soup.find_all('source', srcset=re.compile(r'\.webp$'))
+                        page_image_count = 0
+                        temp_image_urls = []
+                        for tag in source_tags:
+                            img_url = tag.get('srcset')
+                            if not img_url:
+                                continue
+                            if img_url.startswith('//'):
+                                img_url = f"https:{img_url}"
+                            elif not img_url.startswith('http'):
+                                img_url = f"https://imgsrc.ru{img_url}"
+                            for img_attempt in range(self.max_retries):
+                                try:
+                                    img_response = session.head(img_url, allow_redirects=True, timeout=3)
+                                    size = int(img_response.headers.get('content-length', 0))
+                                    if size >= self.min_size:
+                                        temp_image_urls.append((img_url, size))
+                                        page_image_count += 1
+                                    break
+                                except requests.RequestException as e:
+                                    self.progress_signal.emit(f"Erro ao verificar imagem {img_url} (tentativa {img_attempt + 1}/{self.max_retries}): {e}")
+                                    if img_attempt + 1 == self.max_retries:
+                                        self.progress_signal.emit(f"Falha ao verificar imagem após {self.max_retries} tentativas: {img_url}")
+                                    time.sleep(self.retry_delay)
+
+                        # Verificar número de imagens (exceto última página ou única página)
+                        if page_image_count < self.images_per_page and not is_last_page and len(page_urls) > 1:
+                            self.progress_signal.emit(f"Aviso: Página {i} tem {page_image_count} imagens, esperado {self.images_per_page}. Tentando novamente...")
+                            if attempt + 1 == self.max_retries:
+                                self.progress_signal.emit(f"Falha na página {i} após {self.max_retries} tentativas: {page_image_count} imagens encontradas")
+                                image_urls = temp_image_urls
+                                break
+                            time.sleep(self.retry_delay)
                             continue
-                        if img_url.startswith('//'):
-                            img_url = f"https:{img_url}"
-                        elif not img_url.startswith('http'):
-                            img_url = f"https://imgsrc.ru{img_url}"
-                        try:
-                            img_response = session.head(img_url, allow_redirects=True, timeout=3)
-                            size = int(img_response.headers.get('content-length', 0))
-                            if size >= self.min_size:
-                                image_urls.append((img_url, size))
-                                page_image_count += 1
-                        except requests.RequestException:
-                            continue
-                    self.progress_signal.emit(f"Imagens .webp encontradas na página {i}: {page_image_count}")
-                    # Emitir imagens encontradas na página
+                        else:
+                            image_urls = temp_image_urls
+                            self.progress_signal.emit(f"Imagens .webp encontradas na página {i}: {page_image_count}")
+                            break
+                    except requests.RequestException as e:
+                        self.progress_signal.emit(f"Erro na página {i} ({current_url}) (tentativa {attempt + 1}/{self.max_retries}): {e}")
+                        if attempt + 1 == self.max_retries:
+                            self.progress_signal.emit(f"Falha na página {i} após {self.max_retries} tentativas")
+                        time.sleep(self.retry_delay)
+                        continue
                     self.result_signal.emit(image_urls, current_url)
-                except requests.RequestException:
-                    self.progress_signal.emit(f"Erro na página {i}, continuando...")
+                    break
 
         except requests.RequestException as e:
             self.error_signal.emit(f"Erro ao acessar URL: {e}")
@@ -236,7 +283,7 @@ class ImageScraper(QMainWindow):
         main_layout.addLayout(size_layout)
 
         conn_layout = QHBoxLayout()
-        conn_layout.addWidget(QLabel("Conexões simultâneas:"))
+        conn_layout.addWidget(QLabel("Conexões simultâneas (downloads):"))
         self.conn_input = QSpinBox()
         self.conn_input.setValue(5)
         self.conn_input.setRange(1, 20)
@@ -458,12 +505,18 @@ class ImageScraper(QMainWindow):
                 continue
 
             def download_single_image(url):
-                try:
-                    filename = os.path.join(dest_folder, url.split('/')[-1])
-                    urllib.request.urlretrieve(url, filename)
-                    return url, filename, f"Baixado: {filename}"
-                except Exception as e:
-                    return url, None, f"Erro ao baixar {url}: {e}"
+                max_retries = 2
+                retry_delay = 2
+                for attempt in range(max_retries):
+                    try:
+                        filename = os.path.join(dest_folder, url.split('/')[-1])
+                        urllib.request.urlretrieve(url, filename)
+                        return url, filename, f"Baixado: {filename}"
+                    except Exception as e:
+                        if attempt + 1 == max_retries:
+                            return url, None, f"Erro ao baixar {url} após {max_retries} tentativas: {e}"
+                        time.sleep(retry_delay)
+                return url, None, f"Erro ao baixar {url} após {max_retries} tentativas"
 
             max_workers = self.conn_input.value()
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
