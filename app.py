@@ -20,7 +20,7 @@ import time
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ScraperThread(QThread):
-    result_signal = pyqtSignal(list)
+    result_signal = pyqtSignal(list, int, int)
     error_signal = pyqtSignal(str)
     title_signal = pyqtSignal(str)
     user_signal = pyqtSignal(str)
@@ -36,6 +36,8 @@ class ScraperThread(QThread):
             session = requests.Session()
             session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'})
             image_urls = []
+            total_images = 0
+            discarded_images = 0
 
             logging.debug(f"Acessando URL da galeria: {self.url}")
             response = session.get(self.url, timeout=10)
@@ -88,12 +90,24 @@ class ScraperThread(QThread):
                         soup = BeautifulSoup(response.text, 'html.parser')
 
                         page_images = []
+                        page_total_images = 0
+                        page_discarded_images = 0
                         for tag in soup.find_all(['source', 'img'], srcset=True) + soup.find_all('img', src=True):
                             img_url = tag.get('srcset') or tag.get('src')
                             if not img_url:
                                 continue
-                            if '/images/1.gif' in img_url or not img_url.lower().endswith(('.webp', '.gif')):
+                            if '/images/1.gif' in img_url:
+                                logging.debug(f"URL descartado (irrelevante): {img_url}")
+                                continue
+                            if not img_url.lower().endswith(('.webp', '.gif', '.jpg', '.png')):
                                 logging.debug(f"URL descartado (formato inválido): {img_url}")
+                                continue
+                            page_total_images += 1
+                            total_images += 1
+                            if img_url.lower().endswith(('.jpg', '.png')):
+                                page_discarded_images += 1
+                                discarded_images += 1
+                                logging.debug(f"URL descartado (miniatura .jpg/.png): {img_url}")
                                 continue
                             if img_url.startswith('//'):
                                 img_url = f"https:{img_url}"
@@ -103,6 +117,8 @@ class ScraperThread(QThread):
                                 img_response = session.get(img_url, allow_redirects=True, timeout=5)
                                 if img_response.status_code != 200:
                                     logging.debug(f"URL com erro {img_response.status_code}: {img_url}")
+                                    page_discarded_images += 1
+                                    discarded_images += 1
                                     continue
                                 size = int(img_response.headers.get('content-length', 0))
                                 if size >= self.min_size:
@@ -110,12 +126,17 @@ class ScraperThread(QThread):
                                     logging.debug(f"Imagem válida encontrada: {img_url} ({size // 1024} KB)")
                                 else:
                                     logging.debug(f"Imagem descartada (tamanho pequeno): {img_url} ({size // 1024} KB)")
+                                    page_discarded_images += 1
+                                    discarded_images += 1
                             except requests.RequestException as e:
                                 logging.warning(f"Erro ao verificar imagem {img_url}: {e}")
+                                page_discarded_images += 1
+                                discarded_images += 1
                                 continue
 
+                        self.progress_signal.emit(f"Foram encontradas: {len(page_images)} imagens válidas (.webp/.gif), {page_discarded_images} descartadas (.jpg/.png ou inválidas), do total de {page_total_images} presentes na página")
                         if i < len(page_urls) and len(page_images) != expected_images_per_page:
-                            logging.warning(f"Página {i} tem {len(page_images)} imagens, esperado {expected_images_per_page}. Tentando novamente...")
+                            logging.warning(f"Página {i} tem {len(page_images)} imagens válidas, esperado {expected_images_per_page}. Tentando novamente...")
                             retries -= 1
                             time.sleep(5)
                             continue
@@ -130,8 +151,8 @@ class ScraperThread(QThread):
                             self.progress_signal.emit(f"Erro na página {i}, continuando...")
                             break
 
-            logging.debug(f"Total de imagens encontradas: {len(image_urls)}")
-            self.result_signal.emit(image_urls)
+            logging.debug(f"Total de imagens válidas encontradas: {len(image_urls)}")
+            self.result_signal.emit(image_urls, total_images, discarded_images)
         except requests.RequestException as e:
             logging.error(f"Erro geral: {e}")
             self.error_signal.emit(f"Erro ao acessar URL: {e}")
@@ -226,7 +247,7 @@ class ImageScraper(QMainWindow):
                         f.write(','.join(str(x).replace(',', '') for x in row) + '\n')
                 self.result_list.addItem(f"Histórico exportado para: {file_path}")
             except (sqlite3.Error, OSError) as e:
-                self.result_list.addItem(f"Erro ao buscar imagens: {e}")
+                self.result_list.addItem(f"Erro ao exportar histórico: {e}")
 
     def init_ui(self):
         main_widget = QWidget()
@@ -351,10 +372,18 @@ class ImageScraper(QMainWindow):
     def set_user_name(self, user):
         self.user_name = user
 
-    def display_results(self, image_urls):
+    def display_results(self, image_urls, total_images, discarded_images):
         self.image_urls = [url for url, _ in image_urls]
         for url, size in image_urls:
             self.result_list.addItem(f"{url} ({size // 1024} KB)")
+        self.result_list.addItem(
+            f"Busca concluída com sucesso!\n"
+            f"Estatísticas: Usuário: {self.user_name}, Título: {self.page_title}, "
+            f"Links tape: {len(self.thread.page_urls) if hasattr(self.thread, 'page_urls') else 1}, "
+            f"Imagens válidas (.webp/.gif): {len(image_urls)}, "
+            f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
+            f"Total processado: {total_images}"
+        )
 
     def display_error(self, error_msg):
         self.result_list.addItem(error_msg)
@@ -426,6 +455,9 @@ class ImageScraper(QMainWindow):
 
         urls_to_download = []
         skip_messages = []
+        total_bytes = 0
+        total_downloads = 0
+        total_errors = 0
         try:
             for url in self.image_urls:
                 url_hash = hashlib.md5(url.encode()).hexdigest()
@@ -445,10 +477,12 @@ class ImageScraper(QMainWindow):
         def download_single_image(url):
             try:
                 filename = os.path.join(dest_folder, url.split('/')[-1])
+                response = urllib.request.urlopen(url)
+                size = int(response.getheader('Content-Length', 0))
                 urllib.request.urlretrieve(url, filename)
-                return url, filename, f"Baixado: {filename}"
+                return url, filename, size, f"Baixado: {filename}"
             except Exception as e:
-                return url, None, f"Erro ao baixar {url}: {e}"
+                return url, None, 0, f"Erro ao baixar {url}: {e}"
 
         max_workers = self.conn_input.value()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -458,9 +492,11 @@ class ImageScraper(QMainWindow):
             self.result_list.addItem(message)
 
         try:
-            for url, filename, message in results:
+            for url, filename, size, message in results:
                 self.result_list.addItem(message)
                 if filename:
+                    total_downloads += 1
+                    total_bytes += size
                     url_hash = hashlib.md5(url.encode()).hexdigest()
                     self.cursor.execute('''
                         INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
@@ -471,9 +507,19 @@ class ImageScraper(QMainWindow):
                     if self.redis_client:
                         self.redis_client.sadd('downloaded_urls', url_hash)
                     self.downloaded_urls_set.add(url_hash)
+                else:
+                    total_errors += 1
         except sqlite3.Error as e:
             self.result_list.addItem(f"Erro ao registrar downloads: {e}")
+            total_errors += 1
 
+        self.result_list.addItem(
+            f"Download concluído com sucesso!\n"
+            f"Estatísticas: Downloads concluídos: {total_downloads}, "
+            f"Total baixado: {total_bytes / (1024 * 1024):.2f} MB, "
+            f"Itens descartados (já baixados): {len(skip_messages)}, "
+            f"Erros: {total_errors}"
+        )
         self.update_history_view()
         self.sync_folders()
 
@@ -498,7 +544,7 @@ class ImageScraper(QMainWindow):
         self.sync_folders()
 
         self.thread = ScraperThread(url, self.size_input.value())
-        self.thread.result_signal.connect(lambda image_urls: self.one_click_download(image_urls))
+        self.thread.result_signal.connect(lambda image_urls, total, discarded: self.one_click_download(image_urls, total, discarded))
         self.thread.error_signal.connect(self.display_error)
         self.thread.title_signal.connect(self.set_page_title)
         self.thread.user_signal.connect(self.set_user_name)
@@ -506,10 +552,18 @@ class ImageScraper(QMainWindow):
         self.thread.finished.connect(self.search_finished)
         self.thread.start()
 
-    def one_click_download(self, image_urls):
-        self.display_results(image_urls)
+    def one_click_download(self, image_urls, total_images, discarded_images):
+        self.display_results(image_urls, total_images, discarded_images)
         if self.image_urls:
             self.download_images(force_user_folder=True, force_subfolder=True, force_overwrite=True)
+        self.result_list.addItem(
+            f"One Click concluído com sucesso!\n"
+            f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
+            f"Links tape: {len(self.thread.page_urls) if hasattr(self.thread, 'page_urls') else 1}, "
+            f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
+            f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
+            f"Total processado: {total_images}"
+        )
         self.search_finished()
 
 if __name__ == '__main__':
