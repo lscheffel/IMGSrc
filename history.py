@@ -32,9 +32,9 @@ class HistoryTab:
         history_layout.addLayout(history_btn_layout)
 
     def clear_history(self):
-        if QMessageBox.question(self.widget, 'Limpar Histórico', 'Deseja limpar todo o histórico de downloads?',
-                               QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-            try:
+        try:
+            if QMessageBox.question(self.widget, 'Limpar Histórico', 'Deseja limpar todo o histórico de downloads?',
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
                 self.cursor.execute('DELETE FROM downloads')
                 self.conn.commit()
                 if self.redis_client:
@@ -42,14 +42,14 @@ class HistoryTab:
                 self.result_list.addItem("Histórico limpo com sucesso.")
                 self.result_list.scrollToBottom()
                 self.update_history_view()
-            except sqlite3.Error as e:
-                self.result_list.addItem(f"Erro ao limpar histórico: {e}")
-                self.result_list.scrollToBottom()
+        except sqlite3.Error as e:
+            self.result_list.addItem(f"Erro ao limpar histórico: {e}")
+            self.result_list.scrollToBottom()
 
     def export_history(self):
-        file_path, _ = QFileDialog.getSaveFileName(self.widget, "Salvar Histórico", "", "CSV Files (*.csv)")
-        if file_path:
-            try:
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(self.widget, "Salvar Histórico", "", "CSV Files (*.csv)")
+            if file_path:
                 self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write('filename,user,url,download_date,path,status\n')
@@ -57,9 +57,9 @@ class HistoryTab:
                         f.write(','.join(str(x).replace(',', '') for x in row) + '\n')
                 self.result_list.addItem(f"Histórico exportado para: {file_path}")
                 self.result_list.scrollToBottom()
-            except (sqlite3.Error, OSError) as e:
-                self.result_list.addItem(f"Erro ao exportar histórico: {e}")
-                self.result_list.scrollToBottom()
+        except (sqlite3.Error, OSError) as e:
+            self.result_list.addItem(f"Erro ao exportar histórico: {e}")
+            self.result_list.scrollToBottom()
 
     def update_history_view(self):
         try:
