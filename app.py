@@ -21,10 +21,11 @@ class ScraperThread(QThread):
     user_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(str)
 
-    def __init__(self, url, min_size):
+    def __init__(self, url, min_size, scrape_tape_directly):
         super().__init__()
         self.url = url
         self.min_size = min_size * 1024
+        self.scrape_tape_directly = scrape_tape_directly
 
     def run(self):
         try:
@@ -32,22 +33,27 @@ class ScraperThread(QThread):
             session.headers.update({'User-Agent': 'Mozilla/5.0'})
             image_urls = []
 
-            # Acessar página da galeria para encontrar o link do tape
-            response = session.get(self.url, timeout=5)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
+            # Determinar URL do tape
+            if self.scrape_tape_directly:
+                tape_url = self.url
+                self.progress_signal.emit(f"Usando URL do tape diretamente: {tape_url}")
+            else:
+                # Acessar página da galeria para encontrar o link do tape
+                response = session.get(self.url, timeout=5)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Encontrar link do tape usando padrão no href
-            tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
-            if not tape_link:
-                self.error_signal.emit(f"Link do tape não encontrado na página da galeria: {self.url}")
-                return
-            tape_url = tape_link['href']
-            if tape_url.startswith('/'):
-                tape_url = f"https://imgsrc.ru{tape_url}"
-            elif not tape_url.startswith('http'):
-                tape_url = f"https://imgsrc.ru/{tape_url}"
-            self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
+                # Encontrar link do tape usando padrão no href
+                tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-0\.html\?pwd='))
+                if not tape_link:
+                    self.error_signal.emit(f"Link do tape não encontrado na página da galeria: {self.url}")
+                    return
+                tape_url = tape_link['href']
+                if tape_url.startswith('/'):
+                    tape_url = f"https://imgsrc.ru{tape_url}"
+                elif not tape_url.startswith('http'):
+                    tape_url = f"https://imgsrc.ru/{tape_url}"
+                self.progress_signal.emit(f"Link do tape encontrado: {tape_url}")
 
             # Acessar página do tape para extrair usuário, título e imagens
             response = session.get(tape_url, timeout=5)
@@ -72,7 +78,8 @@ class ScraperThread(QThread):
 
             # Extrair URLs das páginas do tape
             page_urls = [tape_url]
-            page_links = soup.find_all('a', href=re.compile(r'tape-.*\.html\?pwd=$'))
+            # Buscar links no <div> com padrão tape-.*\.html\?pwd=
+            page_links = soup.find_all('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html\?pwd='))
             for link in page_links:
                 page_url = link['href']
                 if page_url.startswith('/'):
@@ -221,7 +228,7 @@ class ImageScraper(QMainWindow):
         main_layout = QVBoxLayout(main_tab)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Digite URLs de galerias (ex.: https://imgsrc.ru/.../79781003.html, separadas por vírgula)")
+        self.url_input.setPlaceholderText("Digite URLs de galerias ou tapes (ex.: https://imgsrc.ru/.../79781003.html ou tape-...html, separadas por vírgula)")
         main_layout.addWidget(self.url_input)
 
         size_layout = QHBoxLayout()
@@ -251,6 +258,10 @@ class ImageScraper(QMainWindow):
         self.overwrite_check = QCheckBox("Sobrescrever imagens existentes")
         self.overwrite_check.setChecked(False)
         main_layout.addWidget(self.overwrite_check)
+
+        self.tape_direct_check = QCheckBox("Scrape Tape Directly")
+        self.tape_direct_check.setChecked(False)
+        main_layout.addWidget(self.tape_direct_check)
 
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.search_images)
@@ -324,8 +335,8 @@ class ImageScraper(QMainWindow):
 
         # Processar cada URL
         for url in urls:
-            self.result_list.addItem(f"Processando galeria: {url}")
-            thread = ScraperThread(url, self.size_input.value())
+            self.result_list.addItem(f"Processando: {url}")
+            thread = ScraperThread(url, self.size_input.value(), self.tape_direct_check.isChecked())
             thread.result_signal.connect(lambda image_urls, u=url: self.display_results(image_urls, u))
             thread.error_signal.connect(self.display_error)
             thread.title_signal.connect(lambda title, u=url: self.set_page_title(title, u))
@@ -523,8 +534,8 @@ class ImageScraper(QMainWindow):
 
         # Processar cada URL
         for url in urls:
-            self.result_list.addItem(f"Processando galeria: {url}")
-            thread = ScraperThread(url, self.size_input.value())
+            self.result_list.addItem(f"Processando: {url}")
+            thread = ScraperThread(url, self.size_input.value(), self.tape_direct_check.isChecked())
             thread.result_signal.connect(lambda image_urls, u=url: self.one_click_download(image_urls, u))
             thread.error_signal.connect(self.display_error)
             thread.title_signal.connect(lambda title, u=url: self.set_page_title(title, u))
