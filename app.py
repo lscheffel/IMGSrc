@@ -15,6 +15,7 @@ import redis
 import hashlib
 import logging
 import time
+import concurrent.futures
 
 # Configurar logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -160,6 +161,88 @@ class ScraperThread(QThread):
             logging.error(f"Erro inesperado: {e}")
             self.error_signal.emit(f"Erro inesperado: {e}")
 
+class DownloadThread(QThread):
+    progress_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal(int, float, int, int)
+
+    def __init__(self, image_urls, dest_folder, user_name, downloaded_urls_set, redis_client, conn, cursor, max_workers, overwrite):
+        super().__init__()
+        self.image_urls = image_urls
+        self.dest_folder = dest_folder
+        self.user_name = user_name
+        self.downloaded_urls_set = downloaded_urls_set
+        self.redis_client = redis_client
+        self.conn = conn
+        self.cursor = cursor
+        self.max_workers = max_workers
+        self.overwrite = overwrite
+
+    def run(self):
+        urls_to_download = []
+        skip_messages = []
+        total_bytes = 0
+        total_downloads = 0
+        total_errors = 0
+
+        try:
+            for url in self.image_urls:
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                if not self.overwrite and (
+                    url_hash in self.downloaded_urls_set or
+                    (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
+                ):
+                    self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
+                    date = self.cursor.fetchone()
+                    skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
+                else:
+                    urls_to_download.append(url)
+        except sqlite3.Error as e:
+            self.progress_signal.emit(f"Erro ao verificar duplicatas: {e}")
+            return
+
+        def download_single_image(url):
+            try:
+                filename = os.path.join(self.dest_folder, url.split('/')[-1])
+                response = urllib.request.urlopen(url)
+                size = int(response.getheader('Content-Length', 0))
+                urllib.request.urlretrieve(url, filename)
+                logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
+                return url, filename, size, f"Baixado: {filename}"
+            except Exception as e:
+                logging.error(f"Erro ao baixar {url}: {e}")
+                return url, None, 0, f"Erro ao baixar {url}: {e}"
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [executor.submit(download_single_image, url) for url in urls_to_download]
+            for future in concurrent.futures.as_completed(futures):
+                url, filename, size, message = future.result()
+                self.progress_signal.emit(message)
+                if filename:
+                    total_downloads += 1
+                    total_bytes += size
+                    try:
+                        url_hash = hashlib.md5(url.encode()).hexdigest()
+                        self.cursor.execute('''
+                            INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (os.path.basename(filename), self.user_name, url, url_hash,
+                              datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
+                        self.conn.commit()
+                        if self.redis_client:
+                            self.redis_client.sadd('downloaded_urls', url_hash)
+                        self.downloaded_urls_set.add(url_hash)
+                    except sqlite3.Error as e:
+                        self.progress_signal.emit(f"Erro ao registrar download {url}: {e}")
+                        logging.error(f"Erro ao registrar download {url}: {e}")
+                        total_errors += 1
+                else:
+                    total_errors += 1
+
+        for message in skip_messages:
+            self.progress_signal.emit(message)
+
+        self.finished_signal.emit(total_downloads, total_bytes / (1024 * 1024), len(skip_messages), total_errors)
+
 class ImageScraper(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -169,7 +252,8 @@ class ImageScraper(QMainWindow):
         self.page_title = "album"
         self.user_name = "unknown_user"
         self.downloaded_urls_set = set()
-        self.thread = None
+        self.scraper_thread = None
+        self.download_thread = None
         self.init_db()
         self.init_redis()
         self.load_cache()
@@ -341,7 +425,7 @@ class ImageScraper(QMainWindow):
         self.update_history_view()
 
     def search_images(self):
-        if self.thread and self.thread.isRunning():
+        if self.scraper_thread and self.scraper_thread.isRunning():
             self.result_list.addItem("Aguarde a busca atual concluir!")
             return
 
@@ -354,17 +438,18 @@ class ImageScraper(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
         self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
         self.sync_folders()
 
-        self.thread = ScraperThread(url, self.size_input.value())
-        self.thread.result_signal.connect(self.display_results)
-        self.thread.error_signal.connect(self.display_error)
-        self.thread.title_signal.connect(self.set_page_title)
-        self.thread.user_signal.connect(self.set_user_name)
-        self.thread.progress_signal.connect(self.result_list.addItem)
-        self.thread.finished.connect(self.search_finished)
-        self.thread.start()
+        self.scraper_thread = ScraperThread(url, self.size_input.value())
+        self.scraper_thread.result_signal.connect(self.display_results)
+        self.scraper_thread.error_signal.connect(self.display_error)
+        self.scraper_thread.title_signal.connect(self.set_page_title)
+        self.scraper_thread.user_signal.connect(self.set_user_name)
+        self.scraper_thread.progress_signal.connect(self.result_list.addItem)
+        self.scraper_thread.finished.connect(self.search_finished)
+        self.scraper_thread.start()
 
     def set_page_title(self, title):
         self.page_title = title
@@ -379,7 +464,7 @@ class ImageScraper(QMainWindow):
         self.result_list.addItem(
             f"Busca concluída com sucesso!\n"
             f"Estatísticas: Usuário: {self.user_name}, Título: {self.page_title}, "
-            f"Links tape: {len(self.thread.page_urls) if hasattr(self.thread, 'page_urls') else 1}, "
+            f"Links tape: {len(self.scraper_thread.page_urls) if hasattr(self.scraper_thread, 'page_urls') else 1}, "
             f"Imagens válidas (.webp/.gif): {len(image_urls)}, "
             f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
             f"Total processado: {total_images}"
@@ -391,9 +476,10 @@ class ImageScraper(QMainWindow):
     def search_finished(self):
         self.search_btn.setEnabled(True)
         self.one_click_btn.setEnabled(True)
+        self.download_btn.setEnabled(True)
         if not self.image_urls:
             self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
-        self.thread = None
+        self.scraper_thread = None
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
@@ -453,78 +539,34 @@ class ImageScraper(QMainWindow):
 
         self.result_list.addItem(f"Estrutura criada: {dest_folder}")
 
-        urls_to_download = []
-        skip_messages = []
-        total_bytes = 0
-        total_downloads = 0
-        total_errors = 0
-        try:
-            for url in self.image_urls:
-                url_hash = hashlib.md5(url.encode()).hexdigest()
-                if not (force_overwrite or self.overwrite_check.isChecked()) and (
-                    url_hash in self.downloaded_urls_set or
-                    (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
-                ):
-                    self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
-                    date = self.cursor.fetchone()
-                    skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
-                else:
-                    urls_to_download.append(url)
-        except sqlite3.Error as e:
-            self.result_list.addItem(f"Erro ao verificar duplicatas: {e}")
+        if self.download_thread and self.download_thread.isRunning():
+            self.result_list.addItem("Aguarde o download atual concluir!")
             return
 
-        def download_single_image(url):
-            try:
-                filename = os.path.join(dest_folder, url.split('/')[-1])
-                response = urllib.request.urlopen(url)
-                size = int(response.getheader('Content-Length', 0))
-                urllib.request.urlretrieve(url, filename)
-                return url, filename, size, f"Baixado: {filename}"
-            except Exception as e:
-                return url, None, 0, f"Erro ao baixar {url}: {e}"
+        self.download_btn.setEnabled(False)
+        self.download_thread = DownloadThread(
+            self.image_urls, dest_folder, self.user_name, self.downloaded_urls_set,
+            self.redis_client, self.conn, self.cursor, self.conn_input.value(), force_overwrite or self.overwrite_check.isChecked()
+        )
+        self.download_thread.progress_signal.connect(self.result_list.addItem)
+        self.download_thread.finished_signal.connect(self.download_finished)
+        self.download_thread.start()
 
-        max_workers = self.conn_input.value()
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(download_single_image, urls_to_download))
-
-        for message in skip_messages:
-            self.result_list.addItem(message)
-
-        try:
-            for url, filename, size, message in results:
-                self.result_list.addItem(message)
-                if filename:
-                    total_downloads += 1
-                    total_bytes += size
-                    url_hash = hashlib.md5(url.encode()).hexdigest()
-                    self.cursor.execute('''
-                        INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (os.path.basename(filename), self.user_name, url, url_hash,
-                          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
-                    self.conn.commit()
-                    if self.redis_client:
-                        self.redis_client.sadd('downloaded_urls', url_hash)
-                    self.downloaded_urls_set.add(url_hash)
-                else:
-                    total_errors += 1
-        except sqlite3.Error as e:
-            self.result_list.addItem(f"Erro ao registrar downloads: {e}")
-            total_errors += 1
-
+    def download_finished(self, total_downloads, total_mb, skipped, errors):
         self.result_list.addItem(
             f"Download concluído com sucesso!\n"
             f"Estatísticas: Downloads concluídos: {total_downloads}, "
-            f"Total baixado: {total_bytes / (1024 * 1024):.2f} MB, "
-            f"Itens descartados (já baixados): {len(skip_messages)}, "
-            f"Erros: {total_errors}"
+            f"Total baixado: {total_mb:.2f} MB, "
+            f"Itens descartados (já baixados): {skipped}, "
+            f"Erros: {errors}"
         )
         self.update_history_view()
         self.sync_folders()
+        self.download_btn.setEnabled(True)
+        self.download_thread = None
 
     def one_click(self):
-        if self.thread and self.thread.isRunning():
+        if self.scraper_thread and self.scraper_thread.isRunning():
             self.result_list.addItem("Aguarde a busca atual concluir!")
             return
 
@@ -540,17 +582,18 @@ class ImageScraper(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.one_click_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
         self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
         self.sync_folders()
 
-        self.thread = ScraperThread(url, self.size_input.value())
-        self.thread.result_signal.connect(lambda image_urls, total, discarded: self.one_click_download(image_urls, total, discarded))
-        self.thread.error_signal.connect(self.display_error)
-        self.thread.title_signal.connect(self.set_page_title)
-        self.thread.user_signal.connect(self.set_user_name)
-        self.thread.progress_signal.connect(self.result_list.addItem)
-        self.thread.finished.connect(self.search_finished)
-        self.thread.start()
+        self.scraper_thread = ScraperThread(url, self.size_input.value())
+        self.scraper_thread.result_signal.connect(lambda image_urls, total, discarded: self.one_click_download(image_urls, total, discarded))
+        self.scraper_thread.error_signal.connect(self.display_error)
+        self.scraper_thread.title_signal.connect(self.set_page_title)
+        self.scraper_thread.user_signal.connect(self.set_user_name)
+        self.scraper_thread.progress_signal.connect(self.result_list.addItem)
+        self.scraper_thread.finished.connect(self.search_finished)
+        self.scraper_thread.start()
 
     def one_click_download(self, image_urls, total_images, discarded_images):
         self.display_results(image_urls, total_images, discarded_images)
@@ -559,12 +602,11 @@ class ImageScraper(QMainWindow):
         self.result_list.addItem(
             f"One Click concluído com sucesso!\n"
             f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
-            f"Links tape: {len(self.thread.page_urls) if hasattr(self.thread, 'page_urls') else 1}, "
+            f"Links tape: {len(self.scraper_thread.page_urls) if hasattr(self.scraper_thread, 'page_urls') else 1}, "
             f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
             f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
             f"Total processado: {total_images}"
         )
-        self.search_finished()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
