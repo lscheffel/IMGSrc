@@ -2,13 +2,15 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTa
 from PyQt5.QtCore import Qt
 import os
 import sqlite3
+import csv
 
 class HistoryTab:
-    def __init__(self, conn, cursor, redis_client, result_list):
+    def __init__(self, conn, cursor, redis_client, result_list, db_lock):
         self.conn = conn
         self.cursor = cursor
         self.redis_client = redis_client
         self.result_list = result_list
+        self.db_lock = db_lock  # Lock para SQLite
         self.widget = QWidget()
         self.init_ui()
 
@@ -35,10 +37,11 @@ class HistoryTab:
         try:
             if QMessageBox.question(self.widget, 'Limpar Histórico', 'Deseja limpar todo o histórico de downloads?',
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-                self.cursor.execute('DELETE FROM downloads')
-                self.conn.commit()
+                with self.db_lock:
+                    self.cursor.execute('DELETE FROM downloads')
+                    self.conn.commit()
                 if self.redis_client:
-                    self.redis_client.flushdb()
+                    self.redis_client.delete('imgscraper:downloaded_urls')  # Namespace específico
                 self.result_list.addItem("Histórico limpo com sucesso.")
                 self.result_list.scrollToBottom()
                 self.update_history_view()
@@ -50,11 +53,14 @@ class HistoryTab:
         try:
             file_path, _ = QFileDialog.getSaveFileName(self.widget, "Salvar Histórico", "", "CSV Files (*.csv)")
             if file_path:
-                self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write('filename,user,url,download_date,path,status\n')
-                    for row in self.cursor.fetchall():
-                        f.write(','.join(str(x).replace(',', '') for x in row) + '\n')
+                with self.db_lock:
+                    self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
+                    rows = self.cursor.fetchall()
+                with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+                    writer.writerow(['filename', 'user', 'url', 'download_date', 'path', 'status'])
+                    for row in rows:
+                        writer.writerow([str(x).replace(',', '') for x in row])
                 self.result_list.addItem(f"Histórico exportado para: {file_path}")
                 self.result_list.scrollToBottom()
         except (sqlite3.Error, OSError) as e:
@@ -64,24 +70,25 @@ class HistoryTab:
     def update_history_view(self):
         try:
             self.history_table.setRowCount(0)
-            self.cursor.execute('SELECT DISTINCT user, path FROM downloads WHERE status="active"')
-            galleries = {f"{user} - {os.path.basename(os.path.dirname(path))}"
-                         for user, path in self.cursor.fetchall()}
+            with self.db_lock:
+                self.cursor.execute('SELECT DISTINCT user, path FROM downloads WHERE status="active" LIMIT 1000')
+                galleries = {f"{user} - {os.path.basename(os.path.dirname(path))}"
+                             for user, path in self.cursor.fetchall()}
 
-            self.cursor.execute('SELECT COUNT(*) FROM downloads')
-            total_rows = len(galleries) + self.cursor.fetchone()[0]
-            self.history_table.setRowCount(total_rows)
-            row = 0
-            for gallery in sorted(galleries):
-                self.history_table.setItem(row, 0, QTableWidgetItem(gallery))
-                row += 1
+                self.cursor.execute('SELECT COUNT(*) FROM downloads')
+                total_rows = len(galleries) + self.cursor.fetchone()[0]
+                self.history_table.setRowCount(total_rows)
+                row = 0
+                for gallery in sorted(galleries):
+                    self.history_table.setItem(row, 0, QTableWidgetItem(gallery))
+                    row += 1
 
-            self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads')
-            for record in self.cursor.fetchall():
-                for col, value in enumerate(record):
-                    self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
-                row += 1
+                self.cursor.execute('SELECT filename, user, url, download_date, path, status FROM downloads LIMIT 1000')
+                for record in self.cursor.fetchall():
+                    for col, value in enumerate(record):
+                        self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    row += 1
             self.history_table.resizeColumnsToContents()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OSError) as e:
             self.result_list.addItem(f"Erro ao atualizar histórico: {e}")
             self.result_list.scrollToBottom()

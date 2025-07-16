@@ -3,6 +3,7 @@ from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QPixmap, QDesktopServices
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
 import json
+import logging
 
 class PreviewTab:
     def __init__(self, result_list):
@@ -11,6 +12,7 @@ class PreviewTab:
         self.network_manager = QNetworkAccessManager()
         self.image_cache = {}  # Cache para miniaturas
         self.image_urls = []
+        self.max_cache_size = 100  # Limite de imagens no cache
         self.init_ui()
 
     def init_ui(self):
@@ -32,7 +34,7 @@ class PreviewTab:
             if column == 1:  # Coluna da URL
                 url = self.preview_table.item(row, column).text()
                 QDesktopServices.openUrl(QUrl(url))
-        except Exception as e:
+        except AttributeError as e:
             self.result_list.addItem(f"Erro ao abrir URL: {e}")
             self.result_list.scrollToBottom()
 
@@ -48,7 +50,7 @@ class PreviewTab:
             request = QNetworkRequest(QUrl(url))
             reply = self.network_manager.get(request)
             reply.finished.connect(lambda: self.handle_thumbnail(reply, row, url))
-        except Exception as e:
+        except ValueError as e:
             self.result_list.addItem(f"Erro ao carregar miniatura {url}: {e}")
             self.result_list.scrollToBottom()
 
@@ -57,17 +59,22 @@ class PreviewTab:
             if reply.error() == reply.NoError:
                 data = reply.readAll()
                 pixmap = QPixmap()
-                pixmap.loadFromData(data)
-                if not pixmap.isNull():
-                    self.image_cache[url] = pixmap
-                    item = QTableWidgetItem()
-                    item.setData(Qt.DecorationRole, pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                    self.preview_table.setItem(row, 0, item)
+                if not pixmap.loadFromData(data):
+                    raise ValueError("Imagem corrompida ou inválida")
+                if len(self.image_cache) >= self.max_cache_size:
+                    self.image_cache.pop(next(iter(self.image_cache)))  # Remover item mais antigo
+                self.image_cache[url] = pixmap
+                item = QTableWidgetItem()
+                item.setData(Qt.DecorationRole, pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self.preview_table.setItem(row, 0, item)
             else:
+                item = QTableWidgetItem("Erro")
+                self.preview_table.setItem(row, 0, item)
                 self.result_list.addItem(f"Erro ao carregar miniatura {url}: {reply.errorString()}")
-                self.result_list.scrollToBottom()
             reply.deleteLater()
-        except Exception as e:
+        except ValueError as e:
+            item = QTableWidgetItem("Imagem inválida")
+            self.preview_table.setItem(row, 0, item)
             self.result_list.addItem(f"Erro ao processar miniatura {url}: {e}")
             self.result_list.scrollToBottom()
 
@@ -76,17 +83,19 @@ class PreviewTab:
             self.image_urls = [url for url, _ in image_urls]
             self.preview_table.setRowCount(len(image_urls))
             for row, (url, size) in enumerate(image_urls):
-                self.preview_table.setRowHeight(row, 200)  # Definir altura da linha para 100 pixels
+                self.preview_table.setRowHeight(row, 200)
                 url_item = QTableWidgetItem(url)
                 url_item.setFlags(url_item.flags() & ~Qt.ItemIsEditable)
                 self.preview_table.setItem(row, 1, url_item)
                 size_item = QTableWidgetItem(f"{size // 1024} KB")
                 size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
                 self.preview_table.setItem(row, 2, size_item)
+                item = QTableWidgetItem("Carregando...")
+                self.preview_table.setItem(row, 0, item)
                 self.load_thumbnail(url, row)
             self.preview_table.resizeColumnsToContents()
-            self.preview_table.setColumnWidth(0, 100)  # Largura fixa para thumbnails
-        except Exception as e:
+            self.preview_table.setColumnWidth(0, 100)
+        except (ValueError, AttributeError) as e:
             self.result_list.addItem(f"Erro ao exibir imagens na aba Preview: {e}")
             self.result_list.scrollToBottom()
 

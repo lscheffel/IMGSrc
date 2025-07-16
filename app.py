@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QPushButton, QListWidget, QFileDialog, QSpinBox, QLabel, QCheckBox,
-                             QTabWidget, QMessageBox)
+                             QTabWidget, QMessageBox, QProgressBar)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import os
 import urllib.request
@@ -18,6 +18,10 @@ import time
 import concurrent.futures
 from history import HistoryTab
 from preview import PreviewTab
+import threading
+import validators
+import mimetypes
+import uuid
 
 # Configurar logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,24 +37,32 @@ class ScraperThread(QThread):
         super().__init__()
         self.url = url
         self.min_size = min_size * 1024
-        self.max_scrape_threads = max_scrape_threads
+        self.max_scrape_threads = max(1, min(max_scrape_threads, 5))  # Limite conservador
+        self.rate_limit_delay = 0.5  # Delay entre requisições (segundos)
 
     def run(self):
         try:
-            session = requests.Session()
-            session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'})
+            # Validar URL
+            if not validators.url(self.url) or not self.url.startswith('https://imgsrc.ru'):
+                self.error_signal.emit("URL inválida ou fora do domínio imgsrc.ru.")
+                return
+
             image_urls = []
             total_images = 0
             discarded_images = 0
 
             logging.debug(f"Acessando URL da galeria: {self.url}")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            })
             response = session.get(self.url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
             logging.debug("HTML da galeria parsed")
 
-            tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html\?pwd='))
-            logging.debug(f"Tape link encontrado: {tape_link}")
+            # Padrões alternativos para tape links
+            tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html(?:\?pwd=)?'))
             if not tape_link:
                 self.error_signal.emit("Link do tape não encontrado.")
                 return
@@ -76,7 +88,7 @@ class ScraperThread(QThread):
             self.progress_signal.emit(f"Título da subpasta: {page_title}")
 
             page_urls = [tape_url]
-            for link in soup.find_all('a', href=re.compile(r'tape-.*\.html\?pwd=$')):
+            for link in soup.find_all('a', href=re.compile(r'tape-.*\.html(?:\?pwd=)?$')):
                 page_url = link['href']
                 page_url = f"https://imgsrc.ru{page_url}" if page_url.startswith('/') else page_url
                 if page_url not in page_urls:
@@ -87,6 +99,11 @@ class ScraperThread(QThread):
                 page_total_images = 0
                 page_discarded_images = 0
                 retries = 3
+                # Criar sessão por thread
+                session = requests.Session()
+                session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                })
                 while retries > 0:
                     self.progress_signal.emit(f"Buscando página {page_index} ({current_url})...")
                     logging.debug(f"Processando página: {current_url} (tentativa {4 - retries})")
@@ -115,12 +132,18 @@ class ScraperThread(QThread):
                             elif not img_url.startswith('http'):
                                 img_url = f"https://imgsrc.ru{img_url}"
                             try:
-                                img_response = session.get(img_url, allow_redirects=True, timeout=5)
-                                if img_response.status_code != 200:
-                                    logging.debug(f"URL com erro {img_response.status_code}: {img_url}")
+                                # Verificar Content-Type
+                                head_response = session.head(img_url, allow_redirects=True, timeout=5)
+                                if head_response.status_code != 200:
+                                    logging.debug(f"URL com erro {head_response.status_code}: {img_url}")
                                     page_discarded_images += 1
                                     continue
-                                size = int(img_response.headers.get('content-length', 0))
+                                content_type = head_response.headers.get('content-type', '')
+                                if not content_type.startswith('image/'):
+                                    logging.debug(f"URL descartado (não é imagem): {img_url}")
+                                    page_discarded_images += 1
+                                    continue
+                                size = int(head_response.headers.get('content-length', 0))
                                 if size >= self.min_size:
                                     page_images.append((img_url, size))
                                     logging.debug(f"Imagem válida encontrada: {img_url} ({size // 1024} KB)")
@@ -132,6 +155,7 @@ class ScraperThread(QThread):
                                 page_discarded_images += 1
                                 continue
                         self.progress_signal.emit(f"Foram encontradas: {len(page_images)} imagens válidas (.webp/.gif), {page_discarded_images} descartadas (.jpg/.png ou inválidas), do total de {page_total_images} presentes na página")
+                        time.sleep(self.rate_limit_delay)  # Rate limiting
                         return page_images, page_total_images, page_discarded_images
                     except requests.RequestException as e:
                         logging.error(f"Erro na página {current_url}: {e}")
@@ -154,8 +178,11 @@ class ScraperThread(QThread):
             logging.debug(f"Total de imagens válidas encontradas: {len(image_urls)}")
             self.result_signal.emit(image_urls, total_images, discarded_images)
         except requests.RequestException as e:
-            logging.error(f"Erro geral: {e}")
+            logging.error(f"Erro de rede: {e}")
             self.error_signal.emit(f"Erro ao acessar URL: {e}")
+        except ValueError as e:
+            logging.error(f"Erro de validação: {e}")
+            self.error_signal.emit(f"Erro de validação: {e}")
         except Exception as e:
             logging.error(f"Erro inesperado: {e}")
             self.error_signal.emit(f"Erro inesperado: {e}")
@@ -164,7 +191,7 @@ class DownloadThread(QThread):
     progress_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(int, float, int, int)
 
-    def __init__(self, image_urls, dest_folder, user_name, downloaded_urls_set, redis_client, conn, cursor, max_workers, overwrite):
+    def __init__(self, image_urls, dest_folder, user_name, downloaded_urls_set, redis_client, conn, cursor, max_workers, overwrite, db_lock):
         super().__init__()
         self.image_urls = image_urls
         self.dest_folder = dest_folder
@@ -173,8 +200,10 @@ class DownloadThread(QThread):
         self.redis_client = redis_client
         self.conn = conn
         self.cursor = cursor
-        self.max_workers = max_workers
+        self.max_workers = max(1, min(max_workers, 10))  # Limite conservador
         self.overwrite = overwrite
+        self.db_lock = db_lock
+        self.rate_limit_delay = 0.5  # Delay entre downloads
 
     def run(self):
         try:
@@ -188,15 +217,14 @@ class DownloadThread(QThread):
             for url in self.image_urls:
                 try:
                     url_hash = hashlib.md5(url.encode()).hexdigest()
-                    if not self.overwrite and (
-                        url_hash in self.downloaded_urls_set or
-                        (self.redis_client and self.redis_client.sismember('downloaded_urls', url_hash))
-                    ):
-                        self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
-                        date = self.cursor.fetchone()
-                        skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
-                    else:
-                        urls_to_download.append(url)
+                    if not self.overwrite:
+                        with self.db_lock:
+                            self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
+                            date = self.cursor.fetchone()
+                        if url_hash in self.downloaded_urls_set or (self.redis_client and self.redis_client.sismember('imgscraper:downloaded_urls', url_hash)):
+                            skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
+                            continue
+                    urls_to_download.append(url)
                 except sqlite3.Error as e:
                     logging.error(f"Erro ao verificar duplicata para {url}: {e}")
                     self.progress_signal.emit(f"Erro ao verificar duplicata para {url}: {e}")
@@ -207,13 +235,27 @@ class DownloadThread(QThread):
 
             def download_single_image(url):
                 try:
-                    filename = os.path.join(self.dest_folder, url.split('/')[-1])
+                    # Sanitizar nome do arquivo
+                    filename_base = url.split('/')[-1]
+                    filename_base = re.sub(r'[^\w\s.-]', '', filename_base)
+                    if not filename_base.lower().endswith(('.webp', '.gif')):
+                        filename_base += '.webp'  # Fallback
+                    filename = os.path.join(self.dest_folder, filename_base)
+                    # Evitar colisões
+                    if os.path.exists(filename) and not self.overwrite:
+                        base, ext = os.path.splitext(filename_base)
+                        filename = os.path.join(self.dest_folder, f"{base}_{uuid.uuid4().hex[:8]}{ext}")
                     response = urllib.request.urlopen(url)
                     size = int(response.getheader('Content-Length', 0))
-                    urllib.request.urlretrieve(url, filename)
+                    # Verificar integridade
+                    with open(filename, 'wb') as f:
+                        f.write(response.read())
+                    if os.path.getsize(filename) != size:
+                        raise ValueError("Download incompleto ou corrompido")
                     logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
+                    time.sleep(self.rate_limit_delay)  # Rate limiting
                     return url, filename, size, f"Baixado: {filename}"
-                except Exception as e:
+                except (urllib.error.URLError, ValueError, OSError) as e:
                     logging.error(f"Erro ao baixar {url}: {e}")
                     return url, None, 0, f"Erro ao baixar {url}: {e}"
 
@@ -227,14 +269,15 @@ class DownloadThread(QThread):
                         total_bytes += size
                         try:
                             url_hash = hashlib.md5(url.encode()).hexdigest()
-                            self.cursor.execute('''
-                                INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            ''', (os.path.basename(filename), self.user_name, url, url_hash,
-                                  datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
-                            self.conn.commit()
+                            with self.db_lock:
+                                self.cursor.execute('''
+                                    INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                ''', (os.path.basename(filename), self.user_name, url, url_hash,
+                                      datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
+                                self.conn.commit()
                             if self.redis_client:
-                                self.redis_client.sadd('downloaded_urls', url_hash)
+                                self.redis_client.sadd('imgscraper:downloaded_urls', url_hash)
                             self.downloaded_urls_set.add(url_hash)
                         except sqlite3.Error as e:
                             self.progress_signal.emit(f"Erro ao registrar download {url}: {e}")
@@ -264,6 +307,7 @@ class ImageScraper(QMainWindow):
         self.downloaded_urls_set = set()
         self.scraper_thread = None
         self.download_thread = None
+        self.db_lock = threading.Lock()  # Lock para SQLite
         self.init_db()
         self.init_redis()
         self.load_cache()
@@ -286,37 +330,41 @@ class ImageScraper(QMainWindow):
                 )
             ''')
             self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_url_hash ON downloads(url_hash)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_status ON downloads(status)')
             self.conn.commit()
         except sqlite3.Error as e:
             logging.error(f"Erro ao inicializar banco de dados: {e}")
+            raise
 
     def init_redis(self):
         try:
             self.redis_client = redis.Redis(host='localhost', port=6379, db=0)
             self.redis_client.ping()
-        except redis.ConnectionError:
+        except redis.ConnectionError as e:
             self.redis_client = None
-            logging.warning("Redis não disponível, usando apenas SQLite.")
+            logging.warning(f"Redis não disponível, usando apenas SQLite: {e}")
 
     def load_cache(self):
         try:
-            self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active"')
-            self.downloaded_urls_set = {row[0] for row in self.cursor.fetchall()}
+            with self.db_lock:
+                self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active" LIMIT 10000')  # Limite de cache
+                self.downloaded_urls_set = {row[0] for row in self.cursor.fetchall()}
         except sqlite3.Error as e:
             logging.error(f"Erro ao carregar cache: {e}")
 
     def sync_folders(self):
         try:
-            self.cursor.execute('SELECT url, path FROM downloads WHERE status="active"')
-            for url, path in self.cursor.fetchall():
-                if not os.path.exists(path):
-                    url_hash = hashlib.md5(url.encode()).hexdigest()
-                    self.cursor.execute('UPDATE downloads SET status="deleted" WHERE url_hash=?', (url_hash,))
-                    if self.redis_client:
-                        self.redis_client.srem('downloaded_urls', url_hash)
-            self.conn.commit()
+            with self.db_lock:
+                self.cursor.execute('SELECT url, path FROM downloads WHERE status="active" LIMIT 1000')  # Paginação
+                for url, path in self.cursor.fetchall():
+                    if not os.path.exists(path):
+                        url_hash = hashlib.md5(url.encode()).hexdigest()
+                        self.cursor.execute('UPDATE downloads SET status="deleted" WHERE url_hash=?', (url_hash,))
+                        if self.redis_client:
+                            self.redis_client.srem('imgscraper:downloaded_urls', url_hash)
+                self.conn.commit()
             self.load_cache()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OSError) as e:
             self.result_list.addItem(f"Erro ao sincronizar pastas: {e}")
             self.result_list.scrollToBottom()
 
@@ -346,16 +394,16 @@ class ImageScraper(QMainWindow):
         conn_layout = QHBoxLayout()
         conn_layout.addWidget(QLabel("Conexões simultâneas:"))
         self.conn_input = QSpinBox()
-        self.conn_input.setValue(16)
-        self.conn_input.setRange(1, 48)
+        self.conn_input.setValue(5)  # Valor padrão reduzido
+        self.conn_input.setRange(1, 10)  # Limite conservador
         conn_layout.addWidget(self.conn_input)
         main_layout.addLayout(conn_layout)
 
         scrape_threads_layout = QHBoxLayout()
         scrape_threads_layout.addWidget(QLabel("Threads de scraping:"))
         self.scrape_threads_input = QSpinBox()
-        self.scrape_threads_input.setValue(8)
-        self.scrape_threads_input.setRange(1, 10)
+        self.scrape_threads_input.setValue(3)  # Valor padrão reduzido
+        self.scrape_threads_input.setRange(1, 5)  # Limite conservador
         scrape_threads_layout.addWidget(self.scrape_threads_input)
         main_layout.addLayout(scrape_threads_layout)
 
@@ -395,15 +443,35 @@ class ImageScraper(QMainWindow):
         self.download_btn.clicked.connect(self.download_images)
         main_layout.addWidget(self.download_btn)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        main_layout.addWidget(self.progress_bar)
+
         self.tabs.addTab(main_tab, "Busca e Download")
 
-        self.history_tab = HistoryTab(self.conn, self.cursor, self.redis_client, self.result_list)
+        self.history_tab = HistoryTab(self.conn, self.cursor, self.redis_client, self.result_list, self.db_lock)
         self.tabs.addTab(self.history_tab.widget, "Histórico de Downloads")
 
         self.preview_tab = PreviewTab(self.result_list)
         self.tabs.addTab(self.preview_tab.widget, "Preview")
 
         self.history_tab.update_history_view()
+
+    def set_controls_enabled(self, enabled):
+        """Habilita/desabilita controles durante operações."""
+        self.url_input.setEnabled(enabled)
+        self.size_input.setEnabled(enabled)
+        self.conn_input.setEnabled(enabled)
+        self.scrape_threads_input.setEnabled(enabled)
+        self.user_folder_check.setEnabled(enabled)
+        self.subfolder_check.setEnabled(enabled)
+        self.overwrite_check.setEnabled(enabled)
+        self.search_btn.setEnabled(enabled)
+        self.one_click_btn.setEnabled(enabled)
+        self.download_btn.setEnabled(enabled)
+        self.folder_btn.setEnabled(enabled)
+        self.tabs.setEnabled(enabled)
+        self.progress_bar.setVisible(not enabled)
 
     def search_images(self):
         if self.scraper_thread and self.scraper_thread.isRunning():
@@ -420,9 +488,8 @@ class ImageScraper(QMainWindow):
             self.result_list.scrollToBottom()
             return
 
-        self.search_btn.setEnabled(False)
-        self.one_click_btn.setEnabled(False)
-        self.download_btn.setEnabled(False)
+        self.set_controls_enabled(False)
+        self.progress_bar.setRange(0, 0)  # Progresso indeterminado
         self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
         self.result_list.scrollToBottom()
         self.sync_folders()
@@ -436,13 +503,11 @@ class ImageScraper(QMainWindow):
             self.scraper_thread.progress_signal.connect(self.add_item_and_scroll)
             self.scraper_thread.finished.connect(self.search_finished)
             self.scraper_thread.start()
-        except Exception as e:
+        except (ValueError, sqlite3.Error) as e:
             logging.error(f"Erro ao iniciar ScraperThread: {e}")
             self.result_list.addItem(f"Erro ao iniciar busca: {e}")
             self.result_list.scrollToBottom()
-            self.search_btn.setEnabled(True)
-            self.one_click_btn.setEnabled(True)
-            self.download_btn.setEnabled(True)
+            self.set_controls_enabled(True)
 
     def set_page_title(self, title):
         self.page_title = title
@@ -470,7 +535,7 @@ class ImageScraper(QMainWindow):
                 f"Total processado: {total_images}"
             )
             self.result_list.scrollToBottom()
-        except Exception as e:
+        except (ValueError, AttributeError) as e:
             logging.error(f"Erro em display_results: {e}")
             self.result_list.addItem(f"Erro ao exibir resultados: {e}")
             self.result_list.scrollToBottom()
@@ -480,9 +545,8 @@ class ImageScraper(QMainWindow):
         self.result_list.scrollToBottom()
 
     def search_finished(self):
-        self.search_btn.setEnabled(True)
-        self.one_click_btn.setEnabled(True)
-        self.download_btn.setEnabled(True)
+        self.set_controls_enabled(True)
+        self.progress_bar.setRange(0, 1)
         if not self.image_urls:
             self.result_list.addItem("Nenhuma imagem .webp ou .gif encontrada!")
             self.result_list.scrollToBottom()
@@ -508,22 +572,22 @@ class ImageScraper(QMainWindow):
             dest_folder = folder
             if force_user_folder or self.user_folder_check.isChecked():
                 try:
-                    dest_folder = os.path.join(folder, self.user_name)
+                    dest_folder = os.path.join(folder, re.sub(r'[^\w\s-]', '', self.user_name))
                     os.makedirs(dest_folder, exist_ok=True)
                     self.result_list.addItem(f"Pasta de usuário criada: {dest_folder}")
                     self.result_list.scrollToBottom()
-                except Exception as e:
+                except OSError as e:
                     self.result_list.addItem(f"Erro ao criar pasta de usuário '{self.user_name}': {e}")
                     self.result_list.scrollToBottom()
                     dest_folder = folder
 
             if force_subfolder or self.subfolder_check.isChecked():
                 try:
-                    dest_folder = os.path.join(dest_folder, self.page_title)
+                    dest_folder = os.path.join(dest_folder, re.sub(r'[^\w\s-]', '', self.page_title))
                     os.makedirs(dest_folder, exist_ok=True)
                     self.result_list.addItem(f"Subpasta criada: {dest_folder}")
                     self.result_list.scrollToBottom()
-                except Exception as e:
+                except OSError as e:
                     self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}")
                     self.result_list.scrollToBottom()
 
@@ -536,19 +600,21 @@ class ImageScraper(QMainWindow):
                 return
 
             logging.debug(f"Iniciando download com {len(self.image_urls)} URLs para {dest_folder}")
-            self.download_btn.setEnabled(False)
+            self.set_controls_enabled(False)
+            self.progress_bar.setRange(0, 0)
             self.download_thread = DownloadThread(
                 self.image_urls, dest_folder, self.user_name, self.downloaded_urls_set,
-                self.redis_client, self.conn, self.cursor, self.conn_input.value(), force_overwrite or self.overwrite_check.isChecked()
+                self.redis_client, self.conn, self.cursor, self.conn_input.value(),
+                force_overwrite or self.overwrite_check.isChecked(), self.db_lock
             )
             self.download_thread.progress_signal.connect(self.add_item_and_scroll)
             self.download_thread.finished_signal.connect(self.download_finished)
             self.download_thread.start()
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logging.error(f"Erro em download_images: {e}")
             self.result_list.addItem(f"Erro ao iniciar download: {e}")
             self.result_list.scrollToBottom()
-            self.download_btn.setEnabled(True)
+            self.set_controls_enabled(True)
 
     def download_finished(self, total_downloads, total_mb, skipped, errors):
         try:
@@ -562,9 +628,9 @@ class ImageScraper(QMainWindow):
             self.result_list.scrollToBottom()
             self.history_tab.update_history_view()
             self.sync_folders()
-            self.download_btn.setEnabled(True)
+            self.set_controls_enabled(True)
             self.download_thread = None
-        except Exception as e:
+        except (sqlite3.Error, OSError) as e:
             logging.error(f"Erro em download_finished: {e}")
             self.result_list.addItem(f"Erro ao finalizar download: {e}")
             self.result_list.scrollToBottom()
@@ -588,9 +654,8 @@ class ImageScraper(QMainWindow):
             self.result_list.scrollToBottom()
             return
 
-        self.search_btn.setEnabled(False)
-        self.one_click_btn.setEnabled(False)
-        self.download_btn.setEnabled(False)
+        self.set_controls_enabled(False)
+        self.progress_bar.setRange(0, 0)
         self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
         self.result_list.scrollToBottom()
         self.sync_folders()
@@ -605,13 +670,11 @@ class ImageScraper(QMainWindow):
             self.scraper_thread.progress_signal.connect(self.add_item_and_scroll)
             self.scraper_thread.finished.connect(self.search_finished)
             self.scraper_thread.start()
-        except Exception as e:
+        except (ValueError, sqlite3.Error) as e:
             logging.error(f"Erro ao iniciar ScraperThread em one_click: {e}")
             self.result_list.addItem(f"Erro ao iniciar One Click: {e}")
             self.result_list.scrollToBottom()
-            self.search_btn.setEnabled(True)
-            self.one_click_btn.setEnabled(True)
-            self.download_btn.setEnabled(True)
+            self.set_controls_enabled(True)
 
     def one_click_download(self, image_urls, total_images, discarded_images):
         try:
@@ -631,13 +694,11 @@ class ImageScraper(QMainWindow):
             )
             self.result_list.scrollToBottom()
             logging.debug("one_click_download concluído com sucesso")
-        except Exception as e:
+        except (ValueError, AttributeError) as e:
             logging.error(f"Erro em one_click_download: {e}")
             self.result_list.addItem(f"Erro ao finalizar One Click: {e}")
             self.result_list.scrollToBottom()
-            self.search_btn.setEnabled(True)
-            self.one_click_btn.setEnabled(True)
-            self.download_btn.setEnabled(True)
+            self.set_controls_enabled(True)
 
 if __name__ == '__main__':
     try:
