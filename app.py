@@ -618,13 +618,27 @@ class ImageScraper(QMainWindow):
 
     def download_finished(self, total_downloads, total_mb, skipped, errors):
         try:
-            self.result_list.addItem(
-                f"Download concluído com sucesso!\n"
-                f"Estatísticas: Downloads concluídos: {total_downloads}, "
-                f"Total baixado: {total_mb:.2f} MB, "
-                f"Itens descartados (já baixados): {skipped}, "
-                f"Erros: {errors}"
-            )
+            # Mover mensagem de conclusão do One Click para cá, se for iniciado por one_click
+            if self.scraper_thread:  # Verifica se one_click foi usado
+                page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
+                self.result_list.addItem(
+                    f"One Click concluído com sucesso!\n"
+                    f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
+                    f"Links tape: {page_count}, "
+                    f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
+                    f"Downloads concluídos: {total_downloads}, "
+                    f"Total baixado: {total_mb:.2f} MB, "
+                    f"Itens descartados (já baixados): {skipped}, "
+                    f"Erros: {errors}"
+                )
+            else:
+                self.result_list.addItem(
+                    f"Download concluído com sucesso!\n"
+                    f"Estatísticas: Downloads concluídos: {total_downloads}, "
+                    f"Total baixado: {total_mb:.2f} MB, "
+                    f"Itens descartados (já baixados): {skipped}, "
+                    f"Erros: {errors}"
+                )
             self.result_list.scrollToBottom()
             self.history_tab.update_history_view()
             self.sync_folders()
@@ -634,6 +648,7 @@ class ImageScraper(QMainWindow):
             logging.error(f"Erro em download_finished: {e}")
             self.result_list.addItem(f"Erro ao finalizar download: {e}")
             self.result_list.scrollToBottom()
+            self.set_controls_enabled(True)
 
     def one_click(self):
         if self.scraper_thread and self.scraper_thread.isRunning():
@@ -682,18 +697,25 @@ class ImageScraper(QMainWindow):
             self.display_results(image_urls, total_images, discarded_images)
             if self.image_urls:
                 logging.debug(f"Chamando download_images para One Click com {len(self.image_urls)} URLs")
-                self.download_images(force_user_folder=True, force_subfolder=True, force_overwrite=True)
-            page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
-            self.result_list.addItem(
-                f"One Click concluído com sucesso!\n"
-                f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
-                f"Links tape: {page_count}, "
-                f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
-                f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
-                f"Total processado: {total_images}"
-            )
-            self.result_list.scrollToBottom()
-            logging.debug("one_click_download concluído com sucesso")
+                self.download_images(
+                    force_user_folder=self.user_folder_check.isChecked(),
+                    force_subfolder=self.subfolder_check.isChecked(),
+                    force_overwrite=self.overwrite_check.isChecked()
+                )
+            else:
+                # Se não houver imagens, exibir mensagem e liberar interface
+                page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
+                self.result_list.addItem(
+                    f"One Click concluído: nenhuma imagem para baixar!\n"
+                    f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
+                    f"Links tape: {page_count}, "
+                    f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
+                    f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
+                    f"Total processado: {total_images}"
+                )
+                self.result_list.scrollToBottom()
+                self.set_controls_enabled(True)
+                logging.debug("one_click_download concluído sem downloads")
         except (ValueError, AttributeError) as e:
             logging.error(f"Erro em one_click_download: {e}")
             self.result_list.addItem(f"Erro ao finalizar One Click: {e}")
