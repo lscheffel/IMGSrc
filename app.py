@@ -39,11 +39,10 @@ class ScraperThread(QThread):
         self.url = url
         self.min_size = min_size * 1024
         self.max_scrape_threads = max(1, min(max_scrape_threads, 5))  # Limite conservador
-        self.rate_limit_delay = 0.5  # Delay entre requisições (segundos)
+        self.rate_limit_delay = 0.1
 
     def run(self):
         try:
-            # Validar URL
             if not validators.url(self.url) or not self.url.startswith('https://imgsrc.ru'):
                 self.error_signal.emit("URL inválida ou fora do domínio imgsrc.ru.")
                 return
@@ -62,7 +61,6 @@ class ScraperThread(QThread):
             soup = BeautifulSoup(response.text, 'html.parser')
             logging.debug("HTML da galeria parsed")
 
-            # Padrões alternativos para tape links
             tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html(?:\?pwd=)?'))
             if not tape_link:
                 self.error_signal.emit("Link do tape não encontrado.")
@@ -100,7 +98,6 @@ class ScraperThread(QThread):
                 page_total_images = 0
                 page_discarded_images = 0
                 retries = 3
-                # Criar sessão por thread
                 session = requests.Session()
                 session.headers.update({
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -113,6 +110,8 @@ class ScraperThread(QThread):
                         response.raise_for_status()
                         soup = BeautifulSoup(response.text, 'html.parser')
 
+                        # Coletar URLs de imagens para verificação concorrente
+                        img_urls = []
                         for tag in soup.find_all(['source', 'img'], srcset=True) + soup.find_all('img', src=True):
                             img_url = tag.get('srcset') or tag.get('src')
                             if not img_url:
@@ -132,31 +131,42 @@ class ScraperThread(QThread):
                                 img_url = f"https:{img_url}"
                             elif not img_url.startswith('http'):
                                 img_url = f"https://imgsrc.ru{img_url}"
+                            img_urls.append(img_url)
+
+                        # Verificar URLs concorrently
+                        def check_image(img_url):
                             try:
-                                # Verificar Content-Type (Alterado de HEAD para GET)
-                                head_response = session.get(img_url, stream=True, timeout=15)
+                                head_response = session.get(img_url, stream=True, timeout=5)
                                 if head_response.status_code != 200:
                                     logging.debug(f"URL com erro {head_response.status_code}: {img_url}")
-                                    page_discarded_images += 1
-                                    continue
+                                    return img_url, None
                                 content_type = head_response.headers.get('content-type', '')
                                 if not content_type.startswith('image/'):
                                     logging.debug(f"URL descartado (não é imagem): {img_url}")
-                                    page_discarded_images += 1
-                                    continue
+                                    return img_url, None
                                 size = int(head_response.headers.get('content-length', 0))
+                                head_response.close()
                                 if size >= self.min_size:
-                                    page_images.append((img_url, size))
                                     logging.debug(f"Imagem válida encontrada: {img_url} ({size // 1024} KB)")
+                                    return img_url, (img_url, size)
                                 else:
                                     logging.debug(f"Imagem descartada (tamanho pequeno): {img_url} ({size // 1024} KB)")
-                                    page_discarded_images += 1
+                                    return img_url, None
                             except requests.RequestException as e:
                                 logging.warning(f"Erro ao verificar imagem {img_url}: {e}")
-                                page_discarded_images += 1
-                                continue
+                                return img_url, None
+
+                        with ThreadPoolExecutor(max_workers=5) as executor:  # Limite de 5 threads para URLs
+                            futures = [executor.submit(check_image, url) for url in img_urls]
+                            for future in concurrent.futures.as_completed(futures):
+                                img_url, result = future.result()
+                                if result:
+                                    page_images.append(result)
+                                else:
+                                    page_discarded_images += 1
+
                         self.progress_signal.emit(f"Foram encontradas: {len(page_images)} imagens válidas (.webp/.gif), {page_discarded_images} descartadas (.jpg/.png ou inválidas), do total de {page_total_images} presentes na página")
-                        time.sleep(self.rate_limit_delay)  # Rate limiting
+                        time.sleep(self.rate_limit_delay)
                         return page_images, page_total_images, page_discarded_images
                     except requests.RequestException as e:
                         logging.error(f"Erro na página {current_url}: {e}")
@@ -195,21 +205,19 @@ class DownloadThread(QThread):
     def __init__(self, image_urls, dest_folder, user_name, downloaded_urls_set, redis_client, conn, cursor, max_workers, overwrite, db_lock):
         super().__init__()
         self.image_urls = image_urls
-        self.dest_folder = os.path.normpath(dest_folder)  # Normalizar caminho
+        self.dest_folder = os.path.normpath(dest_folder)
         self.user_name = user_name
         self.downloaded_urls_set = downloaded_urls_set
         self.redis_client = redis_client
         self.conn = conn
         self.cursor = cursor
-        self.max_workers = max(1, min(max_workers, 10))  # Limite conservador
+        self.max_workers = max(1, min(max_workers, 10))
         self.overwrite = overwrite
         self.db_lock = db_lock
-        self.rate_limit_delay = 0.5  # Delay entre downloads
+        self.rate_limit_delay = 0.5
 
     def check_write_permission(self, folder):
-        """Verifica permissões de escrita criando um arquivo temporário."""
         try:
-            # Garantir que a pasta existe
             os.makedirs(folder, exist_ok=True)
             temp_file = tempfile.NamedTemporaryFile(delete=False, dir=folder, suffix='.tmp')
             temp_file.write(b"test")
@@ -230,7 +238,6 @@ class DownloadThread(QThread):
             total_downloads = 0
             total_errors = 0
 
-            # Verificar permissões de escrita na pasta
             if not self.check_write_permission(self.dest_folder):
                 raise OSError(f"Sem permissão de escrita na pasta: {self.dest_folder}")
 
@@ -238,7 +245,6 @@ class DownloadThread(QThread):
                 try:
                     url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
                     if not self.overwrite:
-                        # Verificar duplicatas apenas no banco SQLite
                         with self.db_lock:
                             self.cursor.execute('SELECT download_date FROM downloads WHERE url_hash=?', (url_hash,))
                             date = self.cursor.fetchone()
@@ -258,20 +264,16 @@ class DownloadThread(QThread):
 
             def download_single_image(url):
                 try:
-                    # Sanitizar nome do arquivo
                     filename_base = url.split('/')[-1]
                     filename_base = re.sub(r'[^\w\s.-]', '', filename_base)
                     if not filename_base.lower().endswith(('.webp', '.gif')):
-                        filename_base += '.webp'  # Fallback
+                        filename_base += '.webp'
                     filename = os.path.join(self.dest_folder, filename_base)
-                    # Evitar colisões
                     if os.path.exists(filename) and not self.overwrite:
                         base, ext = os.path.splitext(filename_base)
                         filename = os.path.join(self.dest_folder, f"{base}_{uuid.uuid4().hex[:8]}{ext}")
-                    # Verificar permissão de escrita
                     if not self.check_write_permission(self.dest_folder):
                         raise OSError(f"Sem permissão de escrita para {filename}")
-                    # Baixar e verificar integridade
                     with urllib.request.urlopen(url, timeout=10) as response:
                         size = int(response.getheader('Content-Length', 0))
                         content_type = response.getheader('Content-Type', '')
@@ -283,7 +285,7 @@ class DownloadThread(QThread):
                     if os.path.getsize(filename) != size:
                         raise ValueError(f"Download incompleto ou corrompido: {filename}")
                     logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
-                    time.sleep(self.rate_limit_delay)  # Rate limiting
+                    time.sleep(self.rate_limit_delay)
                     return url, filename, size, f"Baixado: {filename}"
                 except (urllib.error.URLError, ValueError, OSError, TimeoutError) as e:
                     logging.error(f"Erro ao baixar {url}: {e}")
@@ -337,7 +339,7 @@ class ImageScraper(QMainWindow):
         self.downloaded_urls_set = set()
         self.scraper_thread = None
         self.download_thread = None
-        self.db_lock = threading.Lock()  # Lock para SQLite
+        self.db_lock = threading.Lock()
         self.init_db(clear_cache=True)
         self.init_redis(clear_cache=True)
         self.load_cache()
@@ -384,7 +386,7 @@ class ImageScraper(QMainWindow):
         try:
             self.downloaded_urls_set = set()
             with self.db_lock:
-                self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active" LIMIT 10000')  # Limite de cache
+                self.cursor.execute('SELECT url_hash FROM downloads WHERE status="active" LIMIT 10000')
                 self.downloaded_urls_set = {row[0] for row in self.cursor.fetchall()}
             logging.debug(f"Cache carregado: {len(self.downloaded_urls_set)} URLs")
         except sqlite3.Error as e:
@@ -393,7 +395,7 @@ class ImageScraper(QMainWindow):
     def sync_folders(self):
         try:
             with self.db_lock:
-                self.cursor.execute('SELECT url, path FROM downloads WHERE status="active" LIMIT 1000')  # Paginação
+                self.cursor.execute('SELECT url, path FROM downloads WHERE status="active" LIMIT 1000')
                 for url, path in self.cursor.fetchall():
                     if not os.path.exists(path):
                         url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
@@ -432,16 +434,16 @@ class ImageScraper(QMainWindow):
         conn_layout = QHBoxLayout()
         conn_layout.addWidget(QLabel("Conexões simultâneas:"))
         self.conn_input = QSpinBox()
-        self.conn_input.setValue(5)  # Valor padrão reduzido
-        self.conn_input.setRange(1, 10)  # Limite conservador
+        self.conn_input.setValue(5)
+        self.conn_input.setRange(1, 10)
         conn_layout.addWidget(self.conn_input)
         main_layout.addLayout(conn_layout)
 
         scrape_threads_layout = QHBoxLayout()
         scrape_threads_layout.addWidget(QLabel("Threads de scraping:"))
         self.scrape_threads_input = QSpinBox()
-        self.scrape_threads_input.setValue(3)  # Valor padrão reduzido
-        self.scrape_threads_input.setRange(1, 5)  # Limite conservador
+        self.scrape_threads_input.setValue(3)
+        self.scrape_threads_input.setRange(1, 5)
         scrape_threads_layout.addWidget(self.scrape_threads_input)
         main_layout.addLayout(scrape_threads_layout)
 
@@ -496,7 +498,6 @@ class ImageScraper(QMainWindow):
         self.history_tab.update_history_view()
 
     def set_controls_enabled(self, enabled):
-        """Habilita/desabilita controles durante operações."""
         self.url_input.setEnabled(enabled)
         self.size_input.setEnabled(enabled)
         self.conn_input.setEnabled(enabled)
@@ -512,9 +513,7 @@ class ImageScraper(QMainWindow):
         self.progress_bar.setVisible(not enabled)
 
     def check_write_permission(self, folder):
-        """Verifica permissões de escrita criando um arquivo temporário."""
         try:
-            # Garantir que a pasta existe
             os.makedirs(folder, exist_ok=True)
             temp_file = tempfile.NamedTemporaryFile(delete=False, dir=folder, suffix='.tmp')
             temp_file.write(b"test")
@@ -529,7 +528,7 @@ class ImageScraper(QMainWindow):
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta de destino")
         if folder:
-            folder = os.path.normpath(folder)  # Normalizar caminho
+            folder = os.path.normpath(folder)
             if not os.path.exists(folder):
                 try:
                     os.makedirs(folder, exist_ok=True)
@@ -560,7 +559,7 @@ class ImageScraper(QMainWindow):
             return
 
         self.set_controls_enabled(False)
-        self.progress_bar.setRange(0, 0)  # Progresso indeterminado
+        self.progress_bar.setRange(0, 0)
         self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
         self.result_list.scrollToBottom()
         self.sync_folders()
@@ -635,9 +634,7 @@ class ImageScraper(QMainWindow):
                 self.result_list.scrollToBottom()
                 return
 
-            # Normalizar caminho
             folder = os.path.normpath(folder)
-            # Verificar se a pasta base existe, criando se necessário
             if not os.path.exists(folder):
                 try:
                     os.makedirs(folder, exist_ok=True)
@@ -669,7 +666,6 @@ class ImageScraper(QMainWindow):
                     self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}")
                     self.result_list.scrollToBottom()
 
-            # Verificar permissões após criar todas as pastas
             if not self.check_write_permission(dest_folder):
                 self.result_list.addItem(f"Sem permissão de escrita na pasta: {dest_folder}")
                 self.result_list.scrollToBottom()
@@ -702,8 +698,7 @@ class ImageScraper(QMainWindow):
 
     def download_finished(self, total_downloads, total_mb, skipped, errors):
         try:
-            # Mover mensagem de conclusão do One Click para cá, se for iniciado por one_click
-            if self.scraper_thread:  # Verifica se one_click foi usado
+            if self.scraper_thread:
                 page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
                 self.result_list.addItem(
                     f"One Click concluído com sucesso!\n"
@@ -787,7 +782,6 @@ class ImageScraper(QMainWindow):
                     force_overwrite=self.overwrite_check.isChecked()
                 )
             else:
-                # Se não houver imagens, exibir mensagem e liberar interface
                 page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
                 self.result_list.addItem(
                     f"One Click concluído: nenhuma imagem para baixar!\n"
