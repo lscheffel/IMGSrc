@@ -16,7 +16,7 @@ import hashlib
 import logging
 import time
 import concurrent.futures
-import unicodedata
+from transliterate import translit
 from history import HistoryTab
 from preview import PreviewTab
 
@@ -73,8 +73,16 @@ class ScraperThread(QThread):
             page_title = title_tag.text.split(' @')[0] if title_tag else ""
             page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
             page_title = re.sub(r'\s+', '_', page_title).rstrip('_') or f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            # Sanitizar nome da pasta para evitar caracteres especiais
-            page_title = unicodedata.normalize('NFKD', page_title).encode('ascii', 'ignore').decode('ascii')
+            # Transliterar cirílico para latim
+            try:
+                page_title = translit(page_title, 'ru', reversed=True)
+                # Garantir que o título seja válido para nomes de pastas
+                page_title = re.sub(r'[^\w-]', '_', page_title).strip('_')
+                if not page_title:
+                    page_title = f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            except Exception as e:
+                logging.warning(f"Erro ao transliterar título '{page_title}': {e}")
+                page_title = f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             self.title_signal.emit(page_title)
             self.progress_signal.emit(f"Título da subpasta: {page_title}")
 
@@ -181,18 +189,12 @@ class DownloadThread(QThread):
 
     def run(self):
         try:
-            logging.debug(f"Iniciando DownloadThread com {len(self.image_urls)} URLs para {self.dest_folder}")
+            logging.debug(f"Iniciando DownloadThread com {len(self.image_urls)} URLs")
             urls_to_download = []
             skip_messages = []
             total_bytes = 0
             total_downloads = 0
             total_errors = 0
-
-            # Verificar permissões de escrita no diretório
-            if not os.access(self.dest_folder, os.W_OK):
-                self.progress_signal.emit(f"Erro: Sem permissão de escrita em {self.dest_folder}")
-                self.finished_signal.emit(0, 0.0, 0, 1)
-                return
 
             for url in self.image_urls:
                 try:
@@ -217,64 +219,40 @@ class DownloadThread(QThread):
             def download_single_image(url):
                 try:
                     filename = os.path.join(self.dest_folder, url.split('/')[-1])
-                    logging.debug(f"Tentando baixar: {url} para {filename}")
-                    # Verificar se o arquivo já existe
-                    if os.path.exists(filename) and not self.overwrite:
-                        return url, None, 0, f"Imagem pulada: {filename} (já existe)"
-                    # Abrir conexão com timeout
-                    with urllib.request.urlopen(url, timeout=10) as response:
-                        size = int(response.getheader('Content-Length', 0))
-                        # Verificar se o diretório é gravável
-                        with open(filename, 'wb') as f:
-                            f.write(response.read())
-                        logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
-                        return url, filename, size, f"Baixado: {filename}"
-                except urllib.error.URLError as e:
-                    logging.error(f"Erro de URL ao baixar {url}: {e}")
-                    return url, None, 0, f"Erro ao baixar {url}: {e}"
-                except IOError as e:
-                    logging.error(f"Erro de E/S ao baixar {url}: {e}")
-                    return url, None, 0, f"Erro ao baixar {url}: {e}"
+                    response = urllib.request.urlopen(url)
+                    size = int(response.getheader('Content-Length', 0))
+                    urllib.request.urlretrieve(url, filename)
+                    logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
+                    return url, filename, size, f"Baixado: {filename}"
                 except Exception as e:
-                    logging.error(f"Erro inesperado ao baixar {url}: {e}")
+                    logging.error(f"Erro ao baixar {url}: {e}")
                     return url, None, 0, f"Erro ao baixar {url}: {e}"
 
-            try:
-                # Usar max_workers=1 temporariamente para isolar problemas de concorrência
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    futures = [executor.submit(download_single_image, url) for url in urls_to_download]
-                    for future in concurrent.futures.as_completed(futures):
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = [executor.submit(download_single_image, url) for url in urls_to_download]
+                for future in concurrent.futures.as_completed(futures):
+                    url, filename, size, message = future.result()
+                    self.progress_signal.emit(message)
+                    if filename:
+                        total_downloads += 1
+                        total_bytes += size
                         try:
-                            url, filename, size, message = future.result()
-                            self.progress_signal.emit(message)
-                            if filename:
-                                total_downloads += 1
-                                total_bytes += size
-                                try:
-                                    url_hash = hashlib.md5(url.encode()).hexdigest()
-                                    self.cursor.execute('''
-                                        INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                                    ''', (os.path.basename(filename), self.user_name, url, url_hash,
-                                          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
-                                    self.conn.commit()
-                                    if self.redis_client:
-                                        self.redis_client.sadd('downloaded_urls', url_hash)
-                                    self.downloaded_urls_set.add(url_hash)
-                                except sqlite3.Error as e:
-                                    self.progress_signal.emit(f"Erro ao registrar download {url}: {e}")
-                                    logging.error(f"Erro ao registrar download {url}: {e}")
-                                    total_errors += 1
-                            else:
-                                total_errors += 1
-                        except Exception as e:
-                            logging.error(f"Erro ao processar resultado de download: {e}")
-                            self.progress_signal.emit(f"Erro ao processar download: {e}")
+                            url_hash = hashlib.md5(url.encode()).hexdigest()
+                            self.cursor.execute('''
+                                INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ''', (os.path.basename(filename), self.user_name, url, url_hash,
+                                  datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
+                            self.conn.commit()
+                            if self.redis_client:
+                                self.redis_client.sadd('downloaded_urls', url_hash)
+                            self.downloaded_urls_set.add(url_hash)
+                        except sqlite3.Error as e:
+                            self.progress_signal.emit(f"Erro ao registrar download {url}: {e}")
+                            logging.error(f"Erro ao registrar download {url}: {e}")
                             total_errors += 1
-            except Exception as e:
-                logging.error(f"Erro no ThreadPoolExecutor: {e}")
-                self.progress_signal.emit(f"Erro no processo de download: {e}")
-                total_errors += 1
+                    else:
+                        total_errors += 1
 
             for message in skip_messages:
                 self.progress_signal.emit(message)
@@ -560,13 +538,6 @@ class ImageScraper(QMainWindow):
                     self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}")
                     self.result_list.scrollToBottom()
 
-            # Verificar permissões de escrita
-            if not os.access(dest_folder, os.W_OK):
-                self.result_list.addItem(f"Erro: Sem permissão de escrita em {dest_folder}")
-                self.result_list.scrollToBottom()
-                self.download_btn.setEnabled(True)
-                return
-
             self.result_list.addItem(f"Estrutura criada: {dest_folder}")
             self.result_list.scrollToBottom()
 
@@ -579,7 +550,7 @@ class ImageScraper(QMainWindow):
             self.download_btn.setEnabled(False)
             self.download_thread = DownloadThread(
                 self.image_urls, dest_folder, self.user_name, self.downloaded_urls_set,
-                self.redis_client, self.conn, self.cursor, 1, force_overwrite or self.overwrite_check.isChecked()
+                self.redis_client, self.conn, self.cursor, self.conn_input.value(), force_overwrite or self.overwrite_check.isChecked()
             )
             self.download_thread.progress_signal.connect(self.add_item_and_scroll)
             self.download_thread.finished_signal.connect(self.download_finished)
@@ -589,8 +560,6 @@ class ImageScraper(QMainWindow):
             self.result_list.addItem(f"Erro ao iniciar download: {e}")
             self.result_list.scrollToBottom()
             self.download_btn.setEnabled(True)
-            self.search_btn.setEnabled(True)
-            self.one_click_btn.setEnabled(True)
 
     def download_finished(self, total_downloads, total_mb, skipped, errors):
         try:
@@ -605,16 +574,11 @@ class ImageScraper(QMainWindow):
             self.history_tab.update_history_view()
             self.sync_folders()
             self.download_btn.setEnabled(True)
-            self.search_btn.setEnabled(True)
-            self.one_click_btn.setEnabled(True)
             self.download_thread = None
         except Exception as e:
             logging.error(f"Erro em download_finished: {e}")
             self.result_list.addItem(f"Erro ao finalizar download: {e}")
             self.result_list.scrollToBottom()
-            self.download_btn.setEnabled(True)
-            self.search_btn.setEnabled(True)
-            self.one_click_btn.setEnabled(True)
 
     def one_click(self):
         if self.scraper_thread and self.scraper_thread.isRunning():
@@ -662,14 +626,21 @@ class ImageScraper(QMainWindow):
 
     def one_click_download(self, image_urls, total_images, discarded_images):
         try:
-            logging.debug(f"Iniciando one_click_download com {len(image_urls)} imagens")
+            logging.debug("Iniciando one_click_download")
             self.display_results(image_urls, total_images, discarded_images)
             if self.image_urls:
                 logging.debug(f"Chamando download_images para One Click com {len(self.image_urls)} URLs")
                 self.download_images(force_user_folder=True, force_subfolder=True, force_overwrite=True)
-            else:
-                self.result_list.addItem("Nenhuma imagem válida para download!")
-                self.result_list.scrollToBottom()
+            page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
+            self.result_list.addItem(
+                f"One Click concluído com sucesso!\n"
+                f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
+                f"Links tape: {page_count}, "
+                f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
+                f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
+                f"Total processado: {total_images}"
+            )
+            self.result_list.scrollToBottom()
             logging.debug("one_click_download concluído com sucesso")
         except Exception as e:
             logging.error(f"Erro em one_click_download: {e}")
