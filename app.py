@@ -30,188 +30,197 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 class ScraperThread(QThread):
     result_signal = pyqtSignal(list, int, int)
     error_signal = pyqtSignal(str)
-    title_signal = pyqtSignal(str)
-    user_signal = pyqtSignal(str)
+    title_signal = pyqtSignal(str, str)  # Inclui URL para identificação
+    user_signal = pyqtSignal(str, str)   # Inclui URL para identificação
     progress_signal = pyqtSignal(str)
 
-    def __init__(self, url, min_size, max_scrape_threads):
+    def __init__(self, urls, min_size, max_scrape_threads, max_url_workers):
         super().__init__()
-        self.url = url
+        self.urls = urls if isinstance(urls, list) else [urls]
         self.min_size = min_size * 1024
-        self.max_scrape_threads = max(1, min(max_scrape_threads, 5))  # Limite conservador
+        self.max_scrape_threads = max(1, min(max_scrape_threads, 10))  # Máximo 10
+        self.max_url_workers = max(1, min(max_url_workers, 16))        # Máximo 16
         self.rate_limit_delay = 0.1
 
     def run(self):
-        try:
-            if not validators.url(self.url) or not self.url.startswith('https://imgsrc.ru'):
-                self.error_signal.emit("URL inválida ou fora do domínio imgsrc.ru.")
-                return
+        all_image_urls = []
+        total_images = 0
+        discarded_images = 0
 
-            image_urls = []
-            total_images = 0
-            discarded_images = 0
+        for url in self.urls:
+            try:
+                if not validators.url(url) or not url.startswith('https://imgsrc.ru'):
+                    self.error_signal.emit(f"URL inválida ou fora do domínio imgsrc.ru: {url}")
+                    continue
 
-            logging.debug(f"Acessando URL da galeria: {self.url}")
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            })
-            response = session.get(self.url, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            logging.debug("HTML da galeria parsed")
-
-            tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html(?:\?pwd=)?'))
-            if not tape_link:
-                self.error_signal.emit("Link do tape não encontrado.")
-                return
-            tape_url = tape_link['href']
-            tape_url = f"https://imgsrc.ru{tape_url}" if tape_url.startswith('/') else tape_url
-            self.progress_signal.emit(f"Link do tape: {tape_url}")
-
-            logging.debug(f"Acessando URL do tape: {tape_url}")
-            response = session.get(tape_url, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            logging.debug("HTML do tape parsed")
-
-            user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', tape_url)
-            user_name = user_match.group(1) if user_match else "unknown_user"
-            self.user_signal.emit(user_name)
-
-            title_tag = soup.find('title')
-            page_title = title_tag.text.split(' @')[0] if title_tag else ""
-            page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
-            page_title = re.sub(r'\s+', '_', page_title).rstrip('_') or f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            self.title_signal.emit(page_title)
-            self.progress_signal.emit(f"Título da subpasta: {page_title}")
-
-            page_urls = [tape_url]
-            for link in soup.find_all('a', href=re.compile(r'tape-.*\.html(?:\?pwd=)?$')):
-                page_url = link['href']
-                page_url = f"https://imgsrc.ru{page_url}" if page_url.startswith('/') else page_url
-                if page_url not in page_urls:
-                    page_urls.append(page_url)
-
-            def scrape_page(current_url, page_index):
-                page_images = []
-                page_total_images = 0
-                page_discarded_images = 0
-                retries = 3
+                logging.debug(f"Acessando URL da galeria: {url}")
                 session = requests.Session()
                 session.headers.update({
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 })
-                while retries > 0:
-                    self.progress_signal.emit(f"Buscando página {page_index} ({current_url})...")
-                    logging.debug(f"Processando página: {current_url} (tentativa {4 - retries})")
-                    try:
-                        response = session.get(current_url, timeout=10)
-                        response.raise_for_status()
-                        soup = BeautifulSoup(response.text, 'html.parser')
+                response = session.get(url, timeout=5)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
+                logging.debug(f"HTML da galeria parsed para {url}")
 
-                        # Coletar URLs de imagens para verificação concorrente
-                        img_urls = []
-                        for tag in soup.find_all(['source', 'img'], srcset=True) + soup.find_all('img', src=True):
-                            img_url = tag.get('srcset') or tag.get('src')
-                            if not img_url:
-                                continue
-                            if '/images/1.gif' in img_url:
-                                logging.debug(f"URL descartado (irrelevante): {img_url}")
-                                continue
-                            if not img_url.lower().endswith(('.webp', '.gif', '.jpg', '.png')):
-                                logging.debug(f"URL descartado (formato inválido): {img_url}")
-                                continue
-                            page_total_images += 1
-                            if img_url.lower().endswith(('.jpg', '.png')):
-                                page_discarded_images += 1
-                                logging.debug(f"URL descartado (miniatura .jpg/.png): {img_url}")
-                                continue
-                            if img_url.startswith('//'):
-                                img_url = f"https:{img_url}"
-                            elif not img_url.startswith('http'):
-                                img_url = f"https://imgsrc.ru{img_url}"
-                            img_urls.append(img_url)
+                tape_link = soup.find('a', href=re.compile(r'/[^/]+/tape-\d+-\d+-\d+\.html(?:\?pwd=)?'))
+                if not tape_link:
+                    self.error_signal.emit(f"Link do tape não encontrado para {url}.")
+                    continue
+                tape_url = tape_link['href']
+                tape_url = f"https://imgsrc.ru{tape_url}" if tape_url.startswith('/') else tape_url
+                self.progress_signal.emit(f"Link do tape: {tape_url}")
 
-                        # Verificar URLs concorrently
-                        def check_image(img_url):
-                            try:
-                                head_response = session.get(img_url, stream=True, timeout=5)
-                                if head_response.status_code != 200:
-                                    logging.debug(f"URL com erro {head_response.status_code}: {img_url}")
-                                    return img_url, None
-                                content_type = head_response.headers.get('content-type', '')
-                                if not content_type.startswith('image/'):
-                                    logging.debug(f"URL descartado (não é imagem): {img_url}")
-                                    return img_url, None
-                                size = int(head_response.headers.get('content-length', 0))
-                                head_response.close()
-                                if size >= self.min_size:
-                                    logging.debug(f"Imagem válida encontrada: {img_url} ({size // 1024} KB)")
-                                    return img_url, (img_url, size)
-                                else:
-                                    logging.debug(f"Imagem descartada (tamanho pequeno): {img_url} ({size // 1024} KB)")
-                                    return img_url, None
-                            except requests.RequestException as e:
-                                logging.warning(f"Erro ao verificar imagem {img_url}: {e}")
+                logging.debug(f"Acessando URL do tape: {tape_url}")
+                response = session.get(tape_url, timeout=5)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
+                logging.debug("HTML do tape parsed")
+
+                user_match = re.match(r'https://imgsrc\.ru/([^/]+)/', tape_url)
+                user_name = user_match.group(1) if user_match else "unknown_user"
+                self.user_signal.emit(user_name, url)
+
+                title_tag = soup.find('title')
+                page_title = title_tag.text.split(' @')[0] if title_tag else ""
+                page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
+                page_title = re.sub(r'\s+', '_', page_title).rstrip('_') or f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                self.title_signal.emit(page_title, url)
+                self.progress_signal.emit(f"Título da subpasta para {url}: {page_title}")
+
+                page_urls = [tape_url]
+                for link in soup.find_all('a', href=re.compile(r'tape-.*\.html(?:\?pwd=)?$')):
+                    page_url = link['href']
+                    page_url = f"https://imgsrc.ru{page_url}" if page_url.startswith('/') else page_url
+                    if page_url not in page_urls:
+                        page_urls.append(page_url)
+
+                def scrape_page(current_url, page_index):
+                    page_images = []
+                    page_total_images = 0
+                    page_discarded_images = 0
+                    retries = 3
+                    session = requests.Session()
+                    session.headers.update({
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    })
+                    while retries > 0:
+                        self.progress_signal.emit(f"Buscando página {page_index} ({current_url})...")
+                        logging.debug(f"Processando página: {current_url} (tentativa {4 - retries})")
+                        try:
+                            response = session.get(current_url, timeout=5)
+                            response.raise_for_status()
+                            soup = BeautifulSoup(response.text, 'html.parser')
+
+                            img_urls = []
+                            for tag in soup.find_all(['source', 'img'], srcset=True) + soup.find_all('img', src=True):
+                                img_url = tag.get('srcset') or tag.get('src')
+                                if not img_url:
+                                    continue
+                                if '/images/1.gif' in img_url:
+                                    logging.debug(f"URL descartado (irrelevante): {img_url}")
+                                    continue
+                                if not img_url.lower().endswith(('.webp', '.gif', '.jpg', '.png')):
+                                    logging.debug(f"URL descartado (formato inválido): {img_url}")
+                                    continue
+                                page_total_images += 1
+                                if img_url.lower().endswith(('.jpg', '.png')):
+                                    page_discarded_images += 1
+                                    logging.debug(f"URL descartado (miniatura .jpg/.png): {img_url}")
+                                    continue
+                                if img_url.startswith('//'):
+                                    img_url = f"https:{img_url}"
+                                elif not img_url.startswith('http'):
+                                    img_url = f"https://imgsrc.ru{img_url}"
+                                img_urls.append(img_url)
+
+                            def check_image(img_url):
+                                for attempt in range(3):  # Máximo 3 tentativas
+                                    try:
+                                        head_response = session.get(img_url, stream=True, timeout=5)
+                                        if head_response.status_code == 404:
+                                            logging.debug(f"404 em {img_url}, tentativa {attempt + 1}/3")
+                                            time.sleep(3)
+                                            continue
+                                        if head_response.status_code != 200:
+                                            logging.debug(f"URL com erro {head_response.status_code}: {img_url}")
+                                            return img_url, None
+                                        content_type = head_response.headers.get('content-type', '')
+                                        if not content_type.startswith('image/'):
+                                            logging.debug(f"URL descartado (não é imagem): {img_url}")
+                                            return img_url, None
+                                        size = int(head_response.headers.get('content-length', 0))
+                                        head_response.close()
+                                        if size >= self.min_size:
+                                            logging.debug(f"Imagem válida encontrada: {img_url} ({size // 1024} KB)")
+                                            return img_url, (img_url, size, user_name, page_title)
+                                        else:
+                                            logging.debug(f"Imagem descartada (tamanho pequeno): {img_url} ({size // 1024} KB)")
+                                            return img_url, None
+                                    except requests.RequestException as e:
+                                        logging.warning(f"Erro ao verificar imagem {img_url}: {e}")
+                                        if attempt < 2:
+                                            time.sleep(3)
+                                        return img_url, None
+                                logging.debug(f"Imagem descartada após 3 tentativas 404: {img_url}")
                                 return img_url, None
 
-                        with ThreadPoolExecutor(max_workers=5) as executor:  # Limite de 5 threads para URLs
-                            futures = [executor.submit(check_image, url) for url in img_urls]
-                            for future in concurrent.futures.as_completed(futures):
-                                img_url, result = future.result()
-                                if result:
-                                    page_images.append(result)
-                                else:
-                                    page_discarded_images += 1
+                            with ThreadPoolExecutor(max_workers=self.max_url_workers) as executor:
+                                futures = [executor.submit(check_image, url) for url in img_urls]
+                                for future in concurrent.futures.as_completed(futures):
+                                    img_url, result = future.result()
+                                    if result:
+                                        page_images.append(result)
+                                    else:
+                                        page_discarded_images += 1
 
-                        self.progress_signal.emit(f"Foram encontradas: {len(page_images)} imagens válidas (.webp/.gif), {page_discarded_images} descartadas (.jpg/.png ou inválidas), do total de {page_total_images} presentes na página")
-                        time.sleep(self.rate_limit_delay)
-                        return page_images, page_total_images, page_discarded_images
-                    except requests.RequestException as e:
-                        logging.error(f"Erro na página {current_url}: {e}")
-                        self.progress_signal.emit(f"Erro na página {page_index}, tentando novamente ({retries} tentativas restantes)...")
-                        retries -= 1
-                        time.sleep(5)
-                        if retries == 0:
-                            self.progress_signal.emit(f"Erro na página {page_index}, continuando...")
-                            return [], page_total_images, page_discarded_images
-                return [], page_total_images, page_discarded_images
+                            self.progress_signal.emit(f"Foram encontradas: {len(page_images)} imagens válidas (.webp/.gif), {page_discarded_images} descartadas (.jpg/.png ou inválidas), do total de {page_total_images} presentes na página")
+                            time.sleep(self.rate_limit_delay)
+                            return page_images, page_total_images, page_discarded_images
+                        except requests.RequestException as e:
+                            logging.error(f"Erro na página {current_url}: {e}")
+                            self.progress_signal.emit(f"Erro na página {page_index}, tentando novamente ({retries} tentativas restantes)...")
+                            retries -= 1
+                            time.sleep(3)
+                            if retries == 0:
+                                self.progress_signal.emit(f"Erro na página {page_index}, continuando...")
+                                return [], page_total_images, page_discarded_images
+                    return [], page_total_images, page_discarded_images
 
-            with ThreadPoolExecutor(max_workers=self.max_scrape_threads) as executor:
-                futures = [executor.submit(scrape_page, url, i) for i, url in enumerate(page_urls, 1)]
-                for future in concurrent.futures.as_completed(futures):
-                    page_images, page_total, page_discarded = future.result()
-                    image_urls.extend(page_images)
-                    total_images += page_total
-                    discarded_images += page_discarded
+                with ThreadPoolExecutor(max_workers=self.max_scrape_threads) as executor:
+                    futures = [executor.submit(scrape_page, url, i) for i, url in enumerate(page_urls, 1)]
+                    for future in concurrent.futures.as_completed(futures):
+                        page_images, page_total, page_discarded = future.result()
+                        all_image_urls.extend(page_images)
+                        total_images += page_total
+                        discarded_images += page_discarded
 
-            logging.debug(f"Total de imagens válidas encontradas: {len(image_urls)}")
-            self.result_signal.emit(image_urls, total_images, discarded_images)
-        except requests.RequestException as e:
-            logging.error(f"Erro de rede: {e}")
-            self.error_signal.emit(f"Erro ao acessar URL: {e}")
-        except ValueError as e:
-            logging.error(f"Erro de validação: {e}")
-            self.error_signal.emit(f"Erro de validação: {e}")
-        except Exception as e:
-            logging.error(f"Erro inesperado: {e}")
-            self.error_signal.emit(f"Erro inesperado: {e}")
+            except requests.RequestException as e:
+                logging.error(f"Erro de rede para {url}: {e}")
+                self.error_signal.emit(f"Erro ao acessar URL {url}: {e}")
+            except ValueError as e:
+                logging.error(f"Erro de validação para {url}: {e}")
+                self.error_signal.emit(f"Erro de validação para {url}: {e}")
+            except Exception as e:
+                logging.error(f"Erro inesperado para {url}: {e}")
+                self.error_signal.emit(f"Erro inesperado para {url}: {e}")
+
+        logging.debug(f"Total de imagens válidas encontradas: {len(all_image_urls)}")
+        self.result_signal.emit(all_image_urls, total_images, discarded_images)
 
 class DownloadThread(QThread):
     progress_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(int, float, int, int)
 
-    def __init__(self, image_urls, dest_folder, user_name, downloaded_urls_set, redis_client, conn, cursor, max_workers, overwrite, db_lock):
+    def __init__(self, image_urls, dest_folder, downloaded_urls_set, redis_client, conn, cursor, max_workers, overwrite, db_lock):
         super().__init__()
-        self.image_urls = image_urls
+        self.image_urls = image_urls  # Lista de (url, size, user, title)
         self.dest_folder = os.path.normpath(dest_folder)
-        self.user_name = user_name
         self.downloaded_urls_set = downloaded_urls_set
         self.redis_client = redis_client
         self.conn = conn
         self.cursor = cursor
-        self.max_workers = max(1, min(max_workers, 10))
+        self.max_workers = max(1, min(max_workers, 48))  # Máximo 48
         self.overwrite = overwrite
         self.db_lock = db_lock
         self.rate_limit_delay = 0.5
@@ -231,7 +240,7 @@ class DownloadThread(QThread):
 
     def run(self):
         try:
-            logging.debug(f"Iniciando DownloadThread com {len(self.image_urls)} URLs para {self.dest_folder}")
+            logging.debug(f"Iniciando DownloadThread com {len(self.image_urls)} URLs")
             urls_to_download = []
             skip_messages = []
             total_bytes = 0
@@ -241,7 +250,7 @@ class DownloadThread(QThread):
             if not self.check_write_permission(self.dest_folder):
                 raise OSError(f"Sem permissão de escrita na pasta: {self.dest_folder}")
 
-            for url in self.image_urls:
+            for url, size, user_name, page_title in self.image_urls:
                 try:
                     url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
                     if not self.overwrite:
@@ -253,7 +262,7 @@ class DownloadThread(QThread):
                             logging.debug(f"Imagem pulada (já existe): {url} (data: {date[0] if date else 'Redis'})")
                             skip_messages.append(f"Imagem pulada: {url} (já baixada em {date[0] if date else 'desconhecido'})")
                             continue
-                    urls_to_download.append(url)
+                    urls_to_download.append((url, size, user_name, page_title))
                 except sqlite3.Error as e:
                     logging.error(f"Erro ao verificar duplicata para {url}: {e}")
                     self.progress_signal.emit(f"Erro ao verificar duplicata para {url}: {e}")
@@ -262,37 +271,64 @@ class DownloadThread(QThread):
 
             logging.debug(f"URLs para download: {len(urls_to_download)}")
 
-            def download_single_image(url):
+            def download_single_image(url, user_name, page_title):
                 try:
+                    dest_folder = self.dest_folder
+                    if user_name:
+                        dest_folder = os.path.join(dest_folder, re.sub(r'[^\w\s-]', '', user_name))
+                        os.makedirs(dest_folder, exist_ok=True)
+                    if page_title:
+                        dest_folder = os.path.join(dest_folder, re.sub(r'[^\w\s-]', '', page_title))
+                        os.makedirs(dest_folder, exist_ok=True)
+                    if not self.check_write_permission(dest_folder):
+                        raise OSError(f"Sem permissão de escrita para {dest_folder}")
+
                     filename_base = url.split('/')[-1]
                     filename_base = re.sub(r'[^\w\s.-]', '', filename_base)
                     if not filename_base.lower().endswith(('.webp', '.gif')):
                         filename_base += '.webp'
-                    filename = os.path.join(self.dest_folder, filename_base)
+                    filename = os.path.join(dest_folder, filename_base)
                     if os.path.exists(filename) and not self.overwrite:
                         base, ext = os.path.splitext(filename_base)
-                        filename = os.path.join(self.dest_folder, f"{base}_{uuid.uuid4().hex[:8]}{ext}")
-                    if not self.check_write_permission(self.dest_folder):
-                        raise OSError(f"Sem permissão de escrita para {filename}")
-                    with urllib.request.urlopen(url, timeout=10) as response:
-                        size = int(response.getheader('Content-Length', 0))
-                        content_type = response.getheader('Content-Type', '')
-                        if not content_type.startswith('image/'):
-                            raise ValueError(f"URL não é imagem: {url} ({content_type})")
-                        data = response.read()
-                    with open(filename, 'wb') as f:
-                        f.write(data)
-                    if os.path.getsize(filename) != size:
-                        raise ValueError(f"Download incompleto ou corrompido: {filename}")
-                    logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
-                    time.sleep(self.rate_limit_delay)
-                    return url, filename, size, f"Baixado: {filename}"
-                except (urllib.error.URLError, ValueError, OSError, TimeoutError) as e:
-                    logging.error(f"Erro ao baixar {url}: {e}")
-                    return url, None, 0, f"Erro ao baixar {url}: {e}"
+                        filename = os.path.join(dest_folder, f"{base}_{uuid.uuid4().hex[:8]}{ext}")
+
+                    for attempt in range(3):  # Máximo 3 tentativas
+                        try:
+                            with urllib.request.urlopen(url, timeout=5) as response:
+                                if response.status == 404:
+                                    logging.debug(f"404 em {url}, tentativa {attempt + 1}/3")
+                                    time.sleep(3)
+                                    continue
+                                if response.status != 200:
+                                    raise ValueError(f"Erro {response.status} ao baixar {url}")
+                                size = int(response.getheader('Content-Length', 0))
+                                content_type = response.getheader('Content-Type', '')
+                                if not content_type.startswith('image/'):
+                                    raise ValueError(f"URL não é imagem: {url} ({content_type})")
+                                data = response.read()
+                            with open(filename, 'wb') as f:
+                                f.write(data)
+                            if os.path.getsize(filename) != size:
+                                raise ValueError(f"Download incompleto ou corrompido: {filename}")
+                            logging.debug(f"Download concluído: {filename} ({size // 1024} KB)")
+                            time.sleep(self.rate_limit_delay)
+                            return url, filename, size, f"Baixado: {filename}"
+                        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                            if getattr(e, 'code', None) == 404 and attempt < 2:
+                                continue
+                            logging.error(f"Erro ao baixar {url}: {e}")
+                            return url, None, 0, f"Erro ao baixar {url}: {e}"
+                        except (ValueError, OSError, TimeoutError) as e:
+                            logging.error(f"Erro ao baixar {url}: {e}")
+                            return url, None, 0, f"Erro ao baixar {url}: {e}"
+                    logging.debug(f"Imagem descartada após 3 tentativas 404: {url}")
+                    return url, None, 0, f"Erro ao baixar {url}: falhou após 3 tentativas 404"
+                except Exception as e:
+                    logging.error(f"Erro inesperado ao baixar {url}: {e}")
+                    return url, None, 0, f"Erro inesperado ao baixar {url}: {e}"
 
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = [executor.submit(download_single_image, url) for url in urls_to_download]
+                futures = [executor.submit(download_single_image, url, user_name, page_title) for url, _, user_name, page_title in urls_to_download]
                 for future in concurrent.futures.as_completed(futures):
                     url, filename, size, message = future.result()
                     self.progress_signal.emit(message)
@@ -305,7 +341,7 @@ class DownloadThread(QThread):
                                 self.cursor.execute('''
                                     INSERT OR REPLACE INTO downloads (filename, user, url, url_hash, download_date, path, status)
                                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                                ''', (os.path.basename(filename), self.user_name, url, url_hash,
+                                ''', (os.path.basename(filename), user_name, url, url_hash,
                                       datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, 'active'))
                                 self.conn.commit()
                             if self.redis_client:
@@ -334,8 +370,8 @@ class ImageScraper(QMainWindow):
         self.setWindowTitle("Image Scraper")
         self.setGeometry(100, 100, 800, 500)
         self.image_urls = []
-        self.page_title = "album"
-        self.user_name = "unknown_user"
+        self.page_titles = {}  # URL -> título
+        self.user_names = {}   # URL -> usuário
         self.downloaded_urls_set = set()
         self.scraper_thread = None
         self.download_thread = None
@@ -420,7 +456,7 @@ class ImageScraper(QMainWindow):
         main_layout = QVBoxLayout(main_tab)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Digite a URL da galeria (ex.: https://imgsrc.ru/.../84647553.html)")
+        self.url_input.setPlaceholderText("Digite URLs das galerias (ex.: https://imgsrc.ru/.../84647553.html, ...)")
         main_layout.addWidget(self.url_input)
 
         size_layout = QHBoxLayout()
@@ -432,20 +468,28 @@ class ImageScraper(QMainWindow):
         main_layout.addLayout(size_layout)
 
         conn_layout = QHBoxLayout()
-        conn_layout.addWidget(QLabel("Conexões simultâneas:"))
+        conn_layout.addWidget(QLabel("Downloads Paralelos:"))
         self.conn_input = QSpinBox()
-        self.conn_input.setValue(5)
-        self.conn_input.setRange(1, 10)
+        self.conn_input.setValue(16)
+        self.conn_input.setRange(1, 48)
         conn_layout.addWidget(self.conn_input)
         main_layout.addLayout(conn_layout)
 
         scrape_threads_layout = QHBoxLayout()
-        scrape_threads_layout.addWidget(QLabel("Threads de scraping:"))
+        scrape_threads_layout.addWidget(QLabel("Páginas Tape:"))
         self.scrape_threads_input = QSpinBox()
-        self.scrape_threads_input.setValue(3)
-        self.scrape_threads_input.setRange(1, 5)
+        self.scrape_threads_input.setValue(2)
+        self.scrape_threads_input.setRange(1, 10)
         scrape_threads_layout.addWidget(self.scrape_threads_input)
         main_layout.addLayout(scrape_threads_layout)
+
+        url_workers_layout = QHBoxLayout()
+        url_workers_layout.addWidget(QLabel("Scraping Paralelo:"))
+        self.url_workers_input = QSpinBox()
+        self.url_workers_input.setValue(6)
+        self.url_workers_input.setRange(1, 16)
+        url_workers_layout.addWidget(self.url_workers_input)
+        main_layout.addLayout(url_workers_layout)
 
         self.user_folder_check = QCheckBox("Criar pasta de usuário")
         self.user_folder_check.setChecked(True)
@@ -502,6 +546,7 @@ class ImageScraper(QMainWindow):
         self.size_input.setEnabled(enabled)
         self.conn_input.setEnabled(enabled)
         self.scrape_threads_input.setEnabled(enabled)
+        self.url_workers_input.setEnabled(enabled)
         self.user_folder_check.setEnabled(enabled)
         self.subfolder_check.setEnabled(enabled)
         self.overwrite_check.setEnabled(enabled)
@@ -552,20 +597,22 @@ class ImageScraper(QMainWindow):
         self.result_list.clear()
         self.preview_tab.clear()
         self.image_urls = []
-        url = self.url_input.text()
-        if not url:
-            self.result_list.addItem("Digite uma URL válida!")
+        self.page_titles = {}
+        self.user_names = {}
+        urls = [url.strip() for url in self.url_input.text().split(',') if url.strip()]
+        if not urls:
+            self.result_list.addItem("Digite pelo menos uma URL válida!")
             self.result_list.scrollToBottom()
             return
 
         self.set_controls_enabled(False)
         self.progress_bar.setRange(0, 0)
-        self.result_list.addItem("Iniciando busca de imagens (.webp, .gif)...")
+        self.result_list.addItem(f"Iniciando busca de imagens (.webp, .gif) para {len(urls)} galerias...")
         self.result_list.scrollToBottom()
         self.sync_folders()
 
         try:
-            self.scraper_thread = ScraperThread(url, self.size_input.value(), self.scrape_threads_input.value())
+            self.scraper_thread = ScraperThread(urls, self.size_input.value(), self.scrape_threads_input.value(), self.url_workers_input.value())
             self.scraper_thread.result_signal.connect(self.display_results)
             self.scraper_thread.error_signal.connect(self.display_error)
             self.scraper_thread.title_signal.connect(self.set_page_title)
@@ -579,11 +626,11 @@ class ImageScraper(QMainWindow):
             self.result_list.scrollToBottom()
             self.set_controls_enabled(True)
 
-    def set_page_title(self, title):
-        self.page_title = title
+    def set_page_title(self, title, url):
+        self.page_titles[url] = title
 
-    def set_user_name(self, user):
-        self.user_name = user
+    def set_user_name(self, user, url):
+        self.user_names[url] = user
 
     def add_item_and_scroll(self, message):
         self.result_list.addItem(message)
@@ -591,15 +638,13 @@ class ImageScraper(QMainWindow):
 
     def display_results(self, image_urls, total_images, discarded_images):
         try:
-            self.image_urls = [url for url, _ in image_urls]
-            for url, size in image_urls:
-                self.result_list.addItem(f"{url} ({size // 1024} KB)")
-            self.preview_tab.display_images(image_urls)
-            page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
+            self.image_urls = image_urls  # (url, size, user, title)
+            for url, size, user_name, page_title in image_urls:
+                self.result_list.addItem(f"{url} ({size // 1024} KB) [Usuário: {user_name}, Título: {page_title}]")
+            self.preview_tab.display_images([(url, size) for url, size, _, _ in image_urls])
             self.result_list.addItem(
                 f"Busca concluída com sucesso!\n"
-                f"Estatísticas: Usuário: {self.user_name}, Título: {self.page_title}, "
-                f"Links tape: {page_count}, "
+                f"Estatísticas gerais: "
                 f"Imagens válidas (.webp/.gif): {len(image_urls)}, "
                 f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
                 f"Total processado: {total_images}"
@@ -644,46 +689,21 @@ class ImageScraper(QMainWindow):
                     self.result_list.scrollToBottom()
                     return
 
-            dest_folder = folder
-            if force_user_folder or self.user_folder_check.isChecked():
-                try:
-                    dest_folder = os.path.join(folder, re.sub(r'[^\w\s-]', '', self.user_name))
-                    os.makedirs(dest_folder, exist_ok=True)
-                    self.result_list.addItem(f"Pasta de usuário criada: {dest_folder}")
-                    self.result_list.scrollToBottom()
-                except OSError as e:
-                    self.result_list.addItem(f"Erro ao criar pasta de usuário '{self.user_name}': {e}")
-                    self.result_list.scrollToBottom()
-                    dest_folder = folder
-
-            if force_subfolder or self.subfolder_check.isChecked():
-                try:
-                    dest_folder = os.path.join(dest_folder, re.sub(r'[^\w\s-]', '', self.page_title))
-                    os.makedirs(dest_folder, exist_ok=True)
-                    self.result_list.addItem(f"Subpasta criada: {dest_folder}")
-                    self.result_list.scrollToBottom()
-                except OSError as e:
-                    self.result_list.addItem(f"Erro ao criar subpasta '{self.page_title}': {e}")
-                    self.result_list.scrollToBottom()
-
-            if not self.check_write_permission(dest_folder):
-                self.result_list.addItem(f"Sem permissão de escrita na pasta: {dest_folder}")
+            if not self.check_write_permission(folder):
+                self.result_list.addItem(f"Sem permissão de escrita na pasta: {folder}")
                 self.result_list.scrollToBottom()
                 return
-
-            self.result_list.addItem(f"Estrutura criada: {dest_folder}")
-            self.result_list.scrollToBottom()
 
             if self.download_thread and self.download_thread.isRunning():
                 self.result_list.addItem("Aguarde o download atual concluir!")
                 self.result_list.scrollToBottom()
                 return
 
-            logging.debug(f"Iniciando download com {len(self.image_urls)} URLs para {dest_folder}")
+            logging.debug(f"Iniciando download com {len(self.image_urls)} URLs")
             self.set_controls_enabled(False)
             self.progress_bar.setRange(0, 0)
             self.download_thread = DownloadThread(
-                self.image_urls, dest_folder, self.user_name, self.downloaded_urls_set,
+                self.image_urls, folder, self.downloaded_urls_set,
                 self.redis_client, self.conn, self.cursor, self.conn_input.value(),
                 force_overwrite or self.overwrite_check.isChecked(), self.db_lock
             )
@@ -698,26 +718,13 @@ class ImageScraper(QMainWindow):
 
     def download_finished(self, total_downloads, total_mb, skipped, errors):
         try:
-            if self.scraper_thread:
-                page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
-                self.result_list.addItem(
-                    f"One Click concluído com sucesso!\n"
-                    f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
-                    f"Links tape: {page_count}, "
-                    f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
-                    f"Downloads concluídos: {total_downloads}, "
-                    f"Total baixado: {total_mb:.2f} MB, "
-                    f"Itens descartados (já baixados): {skipped}, "
-                    f"Erros: {errors}"
-                )
-            else:
-                self.result_list.addItem(
-                    f"Download concluído com sucesso!\n"
-                    f"Estatísticas: Downloads concluídos: {total_downloads}, "
-                    f"Total baixado: {total_mb:.2f} MB, "
-                    f"Itens descartados (já baixados): {skipped}, "
-                    f"Erros: {errors}"
-                )
+            self.result_list.addItem(
+                f"Download concluído com sucesso!\n"
+                f"Estatísticas: Downloads concluídos: {total_downloads}, "
+                f"Total baixado: {total_mb:.2f} MB, "
+                f"Itens descartados (já baixados): {skipped}, "
+                f"Erros: {errors}"
+            )
             self.result_list.scrollToBottom()
             self.history_tab.update_history_view()
             self.sync_folders()
@@ -738,9 +745,11 @@ class ImageScraper(QMainWindow):
         self.result_list.clear()
         self.preview_tab.clear()
         self.image_urls = []
-        url = self.url_input.text()
-        if not url:
-            self.result_list.addItem("Digite uma URL válida!")
+        self.page_titles = {}
+        self.user_names = {}
+        urls = [url.strip() for url in self.url_input.text().split(',') if url.strip()]
+        if not urls:
+            self.result_list.addItem("Digite pelo menos uma URL válida!")
             self.result_list.scrollToBottom()
             return
         if not self.folder_input.text():
@@ -750,13 +759,13 @@ class ImageScraper(QMainWindow):
 
         self.set_controls_enabled(False)
         self.progress_bar.setRange(0, 0)
-        self.result_list.addItem("Iniciando One Click: busca e download (.webp, .gif)...")
+        self.result_list.addItem(f"Iniciando One Click: busca e download (.webp, .gif) para {len(urls)} galerias...")
         self.result_list.scrollToBottom()
         self.sync_folders()
 
         try:
             logging.debug("Iniciando ScraperThread para One Click")
-            self.scraper_thread = ScraperThread(url, self.size_input.value(), self.scrape_threads_input.value())
+            self.scraper_thread = ScraperThread(urls, self.size_input.value(), self.scrape_threads_input.value(), self.url_workers_input.value())
             self.scraper_thread.result_signal.connect(lambda image_urls, total, discarded: self.one_click_download(image_urls, total, discarded))
             self.scraper_thread.error_signal.connect(self.display_error)
             self.scraper_thread.title_signal.connect(self.set_page_title)
@@ -782,11 +791,9 @@ class ImageScraper(QMainWindow):
                     force_overwrite=self.overwrite_check.isChecked()
                 )
             else:
-                page_count = len(getattr(self.scraper_thread, 'page_urls', [1]))
                 self.result_list.addItem(
                     f"One Click concluído: nenhuma imagem para baixar!\n"
-                    f"Estatísticas gerais: Usuário: {self.user_name}, Título: {self.page_title}, "
-                    f"Links tape: {page_count}, "
+                    f"Estatísticas gerais: "
                     f"Imagens válidas (.webp/.gif): {len(self.image_urls)}, "
                     f"Imagens descartadas (.jpg/.png ou inválidas): {discarded_images}, "
                     f"Total processado: {total_images}"
