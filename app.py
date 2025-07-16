@@ -16,7 +16,6 @@ import hashlib
 import logging
 import time
 import concurrent.futures
-from transliterate import translit
 from history import HistoryTab
 from preview import PreviewTab
 
@@ -73,16 +72,6 @@ class ScraperThread(QThread):
             page_title = title_tag.text.split(' @')[0] if title_tag else ""
             page_title = re.sub(r'[^\w\s-]', '', page_title).strip()
             page_title = re.sub(r'\s+', '_', page_title).rstrip('_') or f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            # Transliterar cirílico para latim
-            try:
-                page_title = translit(page_title, 'ru', reversed=True)
-                # Garantir que o título seja válido para nomes de pastas
-                page_title = re.sub(r'[^\w-]', '_', page_title).strip('_')
-                if not page_title:
-                    page_title = f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            except Exception as e:
-                logging.warning(f"Erro ao transliterar título '{page_title}': {e}")
-                page_title = f"album_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             self.title_signal.emit(page_title)
             self.progress_signal.emit(f"Título da subpasta: {page_title}")
 
