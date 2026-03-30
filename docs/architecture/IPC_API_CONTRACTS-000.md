@@ -4,7 +4,7 @@
 | Method | Route | Body | Response |
 |---|---|---|---|
 | GET | `/api/health` | - | `{ status: "ok" }` |
-| POST | `/api/scrape` | `{ urls[], minSizeKb, scrapeThreads, urlWorkers }` | `{ images[], totalImages, discardedImages }` |
+| POST | `/api/scrape` | `{ urls[], minSizeKb, scrapeThreads, urlWorkers }` | `{ images[], totalImages, discardedImages, warnings? }` |
 | POST | `/api/download` | `{ images[], destFolder, overwrite, createUserFolder, createAlbumFolder, downloadsParallel }` | `{ totalDownloads, totalMb, skipped, errors }` |
 | POST | `/api/jobs/download` | mesmo payload de `/api/download` | `{ jobId, status }` (202) |
 | GET | `/api/jobs/download` | - | `{ items[], queue }` |

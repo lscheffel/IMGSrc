@@ -23,6 +23,9 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Suite de testes frontend estabilizada (`vi.mock` hoisting).
 - `npm run dev` na raiz agora sobe API e Web em paralelo.
 - Scripts `dev:stop` e `dev:reset` adicionados para resolver conflito de portas.
+- Scraper resiliente: falhas pontuais de URL/página não derrubam a busca completa.
+- Correção SQLite em download/one-click (`status = 'active'` como literal de string).
+- Frontend exibe erro detalhado da API e avisos de scraping.
 
 ## [1.0.0] - 2025-07-16
 ### Added

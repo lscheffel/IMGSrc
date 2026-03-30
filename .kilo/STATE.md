@@ -12,6 +12,8 @@ decisions:
 - Qualidade obrigatória via lint/test/build em CI, com execução local validada.
 - ESLint v9 opera em flat config (`eslint.config.js`).
 - Fase RFC-001 iniciada com fila assíncrona de download e endpoint `/api/metrics`.
+- Scraper Node agora tolera falhas parciais e devolve `warnings`.
+- Download/One Click corrigidos com filtro SQL `status = 'active'`.
 
 quality_gate:
 todo_fixme_count: 0

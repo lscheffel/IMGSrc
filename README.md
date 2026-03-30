@@ -14,6 +14,8 @@ Migração para stack ouro: **Node + SQLite + React + Vite + Tailwind + Vue + Zu
 - `GET /api/history` e `GET /api/history/export`
 - `GET /api/metrics`
 
+`/api/scrape` retorna `warnings` opcionais para falhas parciais sem interromper toda a busca.
+
 ## Scripts
 - `npm run dev`
 - `npm run dev:stop`
