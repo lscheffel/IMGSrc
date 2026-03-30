@@ -1,0 +1,37 @@
+# Node
+node_modules/
+dist/
+coverage/
+*.log
+npm-debug.log*
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# Build outputs
+*.tsbuildinfo
+.vite/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python legacy artifacts
+__pycache__/
+*.pyc
+
+# Runtime DB and temp
+data/
+tmp/
+results/
+apps/api/results/
+
+# Generated JS from TS type-check runs
+apps/api/test/*.js
+apps/web/src/**/*.js
+apps/web/test/**/*.js
+apps/web/*config.js

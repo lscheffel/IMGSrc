@@ -1,0 +1,33 @@
+{
+  "name": "imgsrc-gold-stack",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm --workspace apps/api run dev\" \"npm --workspace apps/web run dev\"",
+    "dev:stop": "kill-port 8787 5173 5174",
+    "dev:reset": "npm run dev:stop && npm run dev",
+    "build": "npm run --workspaces --if-present build",
+    "test": "npm run --workspaces --if-present test",
+    "lint": "npm run --workspaces --if-present lint",
+    "clean": "npm run --workspaces --if-present clean && rimraf coverage"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.17.0",
+    "@typescript-eslint/parser": "^8.17.0",
+    "eslint": "^9.15.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "concurrently": "^9.1.2",
+    "kill-port": "^2.0.1",
+    "prettier": "^3.4.1",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  }
+}
