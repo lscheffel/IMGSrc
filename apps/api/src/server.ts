@@ -1,13 +1,22 @@
 import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
 
 import { clearHistory, exportHistoryCsv, listHistoryPage } from './db.js';
+import { rateLimitMiddleware } from './middleware/rateLimit.js';
 import { downloadImages } from './services/downloader.js';
 import { scrapeGalleries } from './services/scraper.js';
-import { getMetricsSnapshot, observeHttpMetric } from './telemetry/metrics.js';
+import { getRateLimiter } from './middleware/rateLimit.js';
+import {
+  calculateThroughput,
+  getMetricsSnapshot,
+  observeHttpMetric,
+  processRateLimitStats
+} from './telemetry/metrics.js';
 import {
   enqueueDownloadJob,
   getDownloadJob,
@@ -20,6 +29,8 @@ import {
   getScrapeQueueStats,
   listScrapeJobs
 } from './workers/scrapeJobs.js';
+import { createScraperPool, createDownloadPool } from './workers/workerPool.js';
+import type { ScrapedImage, ScrapeResponse, DownloadResponse } from './types.js';
 
 const scrapeSchema = z.object({
   urls: z.array(z.string().min(1)).min(1),
@@ -51,6 +62,12 @@ const historyQuerySchema = z.object({
 
 export function createServer() {
   const app = express();
+
+  // Initialize worker pools
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const scraperPool = createScraperPool(join(currentDir, 'workers/scraperWorker.ts'));
+  const downloadPool = createDownloadPool(join(currentDir, 'workers/downloadWorker.ts'));
+
   app.use(cors());
   app.use(express.json({ limit: '2mb' }));
   app.use((req, res, next) => {
@@ -68,6 +85,9 @@ export function createServer() {
     next();
   });
 
+  // Rate-limit middleware applied only to routes that make external requests
+  app.use(rateLimitMiddleware());
+
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
@@ -83,8 +103,17 @@ export function createServer() {
     }
 
     try {
-      const result = await scrapeGalleries(parsed.data);
-      res.json(result);
+      // Usar worker pool para scraping assíncrono
+      const response = await scraperPool.postMessage<unknown, ScrapeResponse>(
+        'SCRAPE_TASK',
+        parsed.data
+      );
+
+      if (!response.success) {
+        throw new Error(response.error?.message ?? 'scrape_failed');
+      }
+
+      res.json(response.payload);
     } catch (error) {
       res.status(500).json({
         error: 'scrape_failed',
@@ -104,8 +133,17 @@ export function createServer() {
     }
 
     try {
-      const result = await downloadImages(parsed.data);
-      res.json(result);
+      // Usar worker pool para download assíncrono
+      const response = await downloadPool.postMessage<unknown, DownloadResponse>(
+        'DOWNLOAD_TASK',
+        parsed.data
+      );
+
+      if (!response.success) {
+        throw new Error(response.error?.message ?? 'download_failed');
+      }
+
+      res.json(response.payload);
     } catch (error) {
       res.status(500).json({
         error: 'download_failed',
@@ -226,13 +264,28 @@ export function createServer() {
     res.json(page);
   });
 
-  app.get('/api/metrics', (_req, res) => {
+  app.get('/api/metrics', (req, res) => {
+    const windowSec = Math.max(1, Math.min(3600, Number(req.query.windowSec) || 60));
+    const detailed = req.query.detailed === 'true';
+
+    const metrics = getMetricsSnapshot({ windowSec, detailed });
+
+    // Processar rate-limit stats se detailed=true
+    const rateLimiterStats = getRateLimiter().getStats();
+    const rateLimits = processRateLimitStats(rateLimiterStats, detailed);
+
     res.json({
-      ...getMetricsSnapshot(),
+      ...metrics,
       queue: {
         download: getQueueStats(),
         scrape: getScrapeQueueStats()
-      }
+      },
+      workers: {
+        scraper: scraperPool.getStats(),
+        download: downloadPool.getStats()
+      },
+      throughput: metrics.throughput,
+      ...(rateLimits && { rateLimits })
     });
   });
 

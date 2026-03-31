@@ -6,5 +6,7 @@
 - [x] Endpoint de métricas com p50/p95 por rota.
 - [x] Scraper resiliente com warnings para falhas parciais.
 - [x] Correção SQL em download/one-click (`status = 'active'`).
-- [ ] Rate-limit distribuído por host.
-- [ ] Telemetria (latência, throughput, taxa de erro).
+- [x] Paginação real de histórico com cursor (GET /api/history?limit&cursor).
+- [x] Rate-limit distribuído por host (rolling window).
+- [x] Workers dedicados (scraper-worker + download-worker).
+- [x] Telemetria avançada (windowSec, detailed, throughput).

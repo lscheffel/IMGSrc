@@ -1,5 +1,5 @@
 # FEAT-002-Neo_Editorial_Mission_Control_UI
-status: Draft  
+status: Implemented  
 owner: Feature Architect / UI Platform  
 alignment:
 - `docs/architecture/RFC-001-Worker_Queue_and_Metrics-000.md`

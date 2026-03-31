@@ -3,6 +3,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [2.3.0] - 2026-03-31
+### Added
+- Rate-limit distribuído por host com rolling window (middleware em `apps/api/src/middleware/rateLimit.ts`).
+- Workers dedicados: scraper-worker (`worker_threads`) e download-worker (`child_process`).
+- Worker pool com min/max configurável e idle timeout.
+- Telemetria avançada em `/api/metrics`: `windowSec` (1-3600s), `detailed` (p99), throughput.
+- Rate-limit stats: top hosts bloqueados, contagem de bloqueios.
+- Variáveis de ambiente configuráveis em `apps/api/.env.example`.
+- Testes TDD: `rate-limit.spec.ts` (26 testes) e `worker-messaging.spec.ts` (45 testes).
+
+### Changed
+- Endpoint `/api/metrics` expandido com parâmetros query e resposta detalhada.
+- Contratos IPC atualizados em `docs/architecture/IPC_API_CONTRACTS-000.md`.
+
 ## [2.2.0] - 2026-03-31
 ### Added
 - Paginação real de histórico no backend (`GET /api/history?limit&cursor`) e virtualização no frontend.

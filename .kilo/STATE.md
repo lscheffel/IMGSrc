@@ -1,6 +1,6 @@
 # STATE
-date: 2026-03-30
-current_version: 2.1.0
+date: 2026-03-31
+current_version: 2.3.0
 source_of_truth:
 - apps/api/src
 - apps/web/src
@@ -15,9 +15,10 @@ decisions:
 - Scraper Node agora tolera falhas parciais e devolve `warnings`.
 - Download/One Click corrigidos com filtro SQL `status = 'active'`.
 - Feedback visual em tempo real implementado via jobs assíncronos e polling de progresso.
+- RFC-002 implementada com rate-limit distribuído, workers dedicados e telemetria avançada.
 
 quality_gate:
 todo_fixme_count: 0
 
-next_task_id: RFC-002-Distributed_Rate_Limit_and_Workers
-next_focus: rate-limit distribuído, workers dedicados e throughput sustentado.
+next_task_id: RFC-003
+next_focus: a definir
