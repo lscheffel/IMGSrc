@@ -29,6 +29,34 @@ describe('useScraperStore', () => {
       images: [],
       totalImages: 0,
       discardedImages: 0,
+      warnings: [],
+      searchProgress: null,
+      downloadProgress: null,
+      searchTimeline: [],
+      downloadTimeline: [],
+      oneClickTimeline: [],
+      searchLive: {
+        startedAt: null,
+        updatedAt: null,
+        elapsedSec: 0,
+        pagesPerSec: 0,
+        validPerSec: 0,
+        etaSec: null
+      },
+      downloadLive: {
+        startedAt: null,
+        updatedAt: null,
+        elapsedSec: 0,
+        filesPerSec: 0,
+        mbPerSec: 0,
+        etaSec: null
+      },
+      liveEvents: [],
+      oneClickProgress: {
+        stage: 'idle',
+        percent: 0,
+        message: ''
+      },
       downloadStats: null,
       error: null
     });

@@ -3,6 +3,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [2.1.0] - 2026-03-30
+### Added
+- Jobs assíncronos de busca com endpoints `POST /api/jobs/scrape` e `GET /api/jobs/scrape/:jobId`.
+- Progresso em tempo real para download e one-click (contadores, bytes, status e polling progressivo).
+- Painel visual on-the-fly no frontend com barras, taxas por segundo, ETA, sparklines e feed de eventos.
+
+### Changed
+- Fluxo de busca/download do frontend migrado para modelo de jobs assíncronos com acompanhamento contínuo.
+
+### Fixed
+- Correção SQLite em download/one-click (`status = 'active'` como literal de string).
+
 ## [2.0.0] - 2026-03-30
 ### Added
 - Monorepo Node/TypeScript com workspaces (`apps/api`, `apps/web`).
@@ -24,7 +36,6 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - `npm run dev` na raiz agora sobe API e Web em paralelo.
 - Scripts `dev:stop` e `dev:reset` adicionados para resolver conflito de portas.
 - Scraper resiliente: falhas pontuais de URL/página não derrubam a busca completa.
-- Correção SQLite em download/one-click (`status = 'active'` como literal de string).
 - Frontend exibe erro detalhado da API e avisos de scraping.
 
 ## [1.0.0] - 2025-07-16

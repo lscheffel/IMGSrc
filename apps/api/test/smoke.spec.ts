@@ -33,6 +33,23 @@ describe('API smoke contract', () => {
     const details = await request(app).get(`/api/jobs/download/${create.body.jobId}`);
     expect(details.status).toBe(200);
     expect(['queued', 'running', 'completed', 'failed']).toContain(details.body.status);
+    expect(details.body.progress).toBeDefined();
+  });
+
+  it('creates and reads async scrape job', async () => {
+    const create = await request(app).post('/api/jobs/scrape').send({
+      urls: ['https://imgsrc.ru/mathiasw/86803498.html'],
+      minSizeKb: 10,
+      scrapeThreads: 1,
+      urlWorkers: 1
+    });
+    expect(create.status).toBe(202);
+    expect(create.body.jobId).toBeTypeOf('string');
+
+    const details = await request(app).get(`/api/jobs/scrape/${create.body.jobId}`);
+    expect(details.status).toBe(200);
+    expect(['queued', 'running', 'completed', 'failed']).toContain(details.body.status);
+    expect(details.body.progress).toBeDefined();
   });
 
   it('exposes metrics snapshot endpoint', async () => {

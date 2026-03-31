@@ -1,6 +1,6 @@
 # STATE
 date: 2026-03-30
-current_version: 2.0.0
+current_version: 2.1.0
 source_of_truth:
 - apps/api/src
 - apps/web/src
@@ -14,6 +14,7 @@ decisions:
 - Fase RFC-001 iniciada com fila assíncrona de download e endpoint `/api/metrics`.
 - Scraper Node agora tolera falhas parciais e devolve `warnings`.
 - Download/One Click corrigidos com filtro SQL `status = 'active'`.
+- Feedback visual em tempo real implementado via jobs assíncronos e polling de progresso.
 
 quality_gate:
 todo_fixme_count: 0

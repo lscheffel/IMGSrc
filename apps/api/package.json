@@ -1,6 +1,6 @@
 {
   "name": "@imgsrc/api",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -30,4 +30,3 @@
     "vitest": "^2.1.5"
   }
 }
-

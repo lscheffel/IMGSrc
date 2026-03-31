@@ -1,4 +1,4 @@
-# IMGSrc v2
+# IMGSrc v2.1.0
 
 Migração para stack ouro: **Node + SQLite + React + Vite + Tailwind + Vue + Zustand + TypeScript**.
 
@@ -10,11 +10,17 @@ Migração para stack ouro: **Node + SQLite + React + Vite + Tailwind + Vue + Zu
 ## Endpoints principais
 - `POST /api/scrape`
 - `POST /api/download` (sincrono)
+- `POST /api/jobs/scrape` + `GET /api/jobs/scrape/:jobId`
 - `POST /api/jobs/download` + `GET /api/jobs/download/:jobId` (assíncrono)
 - `GET /api/history` e `GET /api/history/export`
 - `GET /api/metrics`
 
 `/api/scrape` retorna `warnings` opcionais para falhas parciais sem interromper toda a busca.
+
+## Feedback visual em tempo real
+- Busca: barra por estágio + contadores (URLs/páginas/probes/válidas/descartadas).
+- Download: barra por itens processados + contadores (baixados/pulados/erros/bytes).
+- One Click: barra composta (busca + download) com status on-the-fly.
 
 ## Scripts
 - `npm run dev`

@@ -17,6 +17,21 @@ export type DownloadInput = {
   downloadsParallel: number;
 };
 
+export type DownloadProgress = {
+  stage: 'queued' | 'running' | 'completed' | 'failed';
+  total: number;
+  processed: number;
+  downloaded: number;
+  skipped: number;
+  errors: number;
+  bytes: number;
+  message?: string;
+};
+
+type DownloadOptions = {
+  onProgress?: (progress: DownloadProgress) => void;
+};
+
 function sanitizeSegment(value: string): string {
   return value.replace(/[^\w\s.-]/g, '').trim().replace(/\s+/g, '_') || 'unknown';
 }
@@ -54,7 +69,10 @@ async function fetchImage(url: string): Promise<Buffer> {
   throw new Error('Falha apos retries');
 }
 
-export async function downloadImages(input: DownloadInput): Promise<DownloadResponse> {
+export async function downloadImages(
+  input: DownloadInput,
+  options?: DownloadOptions,
+): Promise<DownloadResponse> {
   const parallel = Math.min(Math.max(input.downloadsParallel, 1), 48);
   const limit = pLimit(parallel);
   const root = path.resolve(input.destFolder || path.join(process.cwd(), 'results'));
@@ -64,6 +82,36 @@ export async function downloadImages(input: DownloadInput): Promise<DownloadResp
   let totalBytes = 0;
   let skipped = 0;
   let errors = 0;
+  let processed = 0;
+
+  const progress: DownloadProgress = {
+    stage: 'running',
+    total: input.images.length,
+    processed: 0,
+    downloaded: 0,
+    skipped: 0,
+    errors: 0,
+    bytes: 0
+  };
+
+  let lastEmit = 0;
+  const emitProgress = (force = false, message?: string): void => {
+    const now = Date.now();
+    if (!force && now - lastEmit < 120) {
+      return;
+    }
+    lastEmit = now;
+    if (message) {
+      progress.message = message;
+    }
+    progress.processed = processed;
+    progress.downloaded = totalDownloads;
+    progress.skipped = skipped;
+    progress.errors = errors;
+    progress.bytes = totalBytes;
+    options?.onProgress?.({ ...progress });
+  };
+  emitProgress(true, 'download_started');
 
   await Promise.all(
     input.images.map((image) =>
@@ -71,6 +119,8 @@ export async function downloadImages(input: DownloadInput): Promise<DownloadResp
         const urlHash = md5(image.url);
         if (!input.overwrite && findDownloadByHash(urlHash)) {
           skipped += 1;
+          processed += 1;
+          emitProgress(false, 'item_skipped');
           return;
         }
 
@@ -111,12 +161,19 @@ export async function downloadImages(input: DownloadInput): Promise<DownloadResp
           });
           totalDownloads += 1;
           totalBytes += data.byteLength;
+          processed += 1;
+          emitProgress(false, 'item_downloaded');
         } catch {
           errors += 1;
+          processed += 1;
+          emitProgress(false, 'item_failed');
         }
       }),
     ),
   );
+
+  progress.stage = 'completed';
+  emitProgress(true, 'download_completed');
 
   return {
     totalDownloads,

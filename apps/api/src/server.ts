@@ -14,6 +14,12 @@ import {
   getQueueStats,
   listDownloadJobs
 } from './workers/downloadQueue.js';
+import {
+  enqueueScrapeJob,
+  getScrapeJob,
+  getScrapeQueueStats,
+  listScrapeJobs
+} from './workers/scrapeJobs.js';
 
 const scrapeSchema = z.object({
   urls: z.array(z.string().min(1)).min(1),
@@ -120,6 +126,55 @@ export function createServer() {
     });
   });
 
+  app.post('/api/jobs/scrape', (req, res) => {
+    const parsed = scrapeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'invalid_payload',
+        details: parsed.error.flatten()
+      });
+      return;
+    }
+
+    const job = enqueueScrapeJob(parsed.data);
+    res.status(202).json({
+      jobId: job.id,
+      status: job.status
+    });
+  });
+
+  app.get('/api/jobs/scrape', (_req, res) => {
+    res.json({
+      items: listScrapeJobs(50).map((job) => ({
+        id: job.id,
+        status: job.status,
+        createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        progress: job.progress
+      })),
+      queue: getScrapeQueueStats()
+    });
+  });
+
+  app.get('/api/jobs/scrape/:jobId', (req, res) => {
+    const job = getScrapeJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'job_not_found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+      progress: job.progress,
+      result: job.result,
+      error: job.error
+    });
+  });
+
   app.get('/api/jobs/download', (_req, res) => {
     res.json({
       items: listDownloadJobs(50).map((job) => ({
@@ -127,7 +182,8 @@ export function createServer() {
         status: job.status,
         createdAt: job.createdAt,
         startedAt: job.startedAt,
-        finishedAt: job.finishedAt
+        finishedAt: job.finishedAt,
+        progress: job.progress
       })),
       queue: getQueueStats()
     });
@@ -145,6 +201,7 @@ export function createServer() {
       createdAt: job.createdAt,
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
+      progress: job.progress,
       result: job.result,
       error: job.error
     });
@@ -159,7 +216,10 @@ export function createServer() {
   app.get('/api/metrics', (_req, res) => {
     res.json({
       ...getMetricsSnapshot(),
-      queue: getQueueStats()
+      queue: {
+        download: getQueueStats(),
+        scrape: getScrapeQueueStats()
+      }
     });
   });
 

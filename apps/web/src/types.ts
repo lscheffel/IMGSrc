@@ -18,3 +18,28 @@ export type DownloadResponse = {
   skipped: number;
   errors: number;
 };
+
+export type ScrapeProgress = {
+  stage: 'queued' | 'resolving_urls' | 'scanning_pages' | 'probing_images' | 'completed' | 'failed';
+  urlsTotal: number;
+  urlsProcessed: number;
+  pagesTotal: number;
+  pagesProcessed: number;
+  candidates: number;
+  probed: number;
+  valid: number;
+  discarded: number;
+  warnings: number;
+  message?: string;
+};
+
+export type DownloadProgress = {
+  stage: 'queued' | 'running' | 'completed' | 'failed';
+  total: number;
+  processed: number;
+  downloaded: number;
+  skipped: number;
+  errors: number;
+  bytes: number;
+  message?: string;
+};

@@ -12,6 +12,24 @@ type ScrapeInput = {
   urlWorkers: number;
 };
 
+export type ScrapeProgress = {
+  stage: 'queued' | 'resolving_urls' | 'scanning_pages' | 'probing_images' | 'completed' | 'failed';
+  urlsTotal: number;
+  urlsProcessed: number;
+  pagesTotal: number;
+  pagesProcessed: number;
+  candidates: number;
+  probed: number;
+  valid: number;
+  discarded: number;
+  warnings: number;
+  message?: string;
+};
+
+type ScrapeOptions = {
+  onProgress?: (progress: ScrapeProgress) => void;
+};
+
 const GALLERY_PREFIX = 'https://imgsrc.ru';
 const MAX_WARNINGS = 40;
 
@@ -143,7 +161,10 @@ async function probeImage(url: string, minBytes: number): Promise<number | null>
   return null;
 }
 
-export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeResponse> {
+export async function scrapeGalleries(
+  input: ScrapeInput,
+  options?: ScrapeOptions,
+): Promise<ScrapeResponse> {
   const minBytes = Math.max(1, input.minSizeKb) * 1024;
   const scrapeLimit = pLimit(Math.min(Math.max(input.scrapeThreads, 1), 10));
   const probeLimit = pLimit(Math.min(Math.max(input.urlWorkers, 1), 16));
@@ -153,6 +174,34 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
   const foundImages: ScrapedImage[] = [];
   const dedupe = new Set<string>();
   const warnings: string[] = [];
+  const progress: ScrapeProgress = {
+    stage: 'resolving_urls',
+    urlsTotal: input.urls.length,
+    urlsProcessed: 0,
+    pagesTotal: 0,
+    pagesProcessed: 0,
+    candidates: 0,
+    probed: 0,
+    valid: 0,
+    discarded: 0,
+    warnings: 0
+  };
+  let lastEmit = 0;
+  const emitProgress = (force = false, message?: string): void => {
+    const now = Date.now();
+    if (!force && now - lastEmit < 120) {
+      return;
+    }
+    lastEmit = now;
+    progress.valid = foundImages.length;
+    progress.discarded = discardedImages;
+    progress.warnings = warnings.length;
+    if (message) {
+      progress.message = message;
+    }
+    options?.onProgress?.({ ...progress });
+  };
+  emitProgress(true, 'scrape_started');
 
   for (const rawUrl of input.urls) {
     const sourceUrl = rawUrl.trim();
@@ -162,6 +211,8 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
 
     if (!isImgsrcUrl(sourceUrl)) {
       addWarning(warnings, `url_invalida_ou_fora_do_dominio: ${sourceUrl}`);
+      progress.urlsProcessed += 1;
+      emitProgress(false, 'url_invalid');
       continue;
     }
 
@@ -169,24 +220,32 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
     if (!isTapeUrl(sourceUrl)) {
       const galleryHtml = await safeFetchText(sourceUrl, warnings, 'galeria');
       if (!galleryHtml) {
+        progress.urlsProcessed += 1;
+        emitProgress(false, 'gallery_unreachable');
         continue;
       }
       const galleryDoc = load(galleryHtml);
       const tapeHref = galleryDoc('a[href*="tape-"]').first().attr('href');
       if (!tapeHref) {
         addWarning(warnings, `tape_nao_encontrado: ${sourceUrl}`);
+        progress.urlsProcessed += 1;
+        emitProgress(false, 'tape_not_found');
         continue;
       }
       try {
         tapeUrl = new URL(tapeHref, GALLERY_PREFIX).toString();
       } catch {
         addWarning(warnings, `tape_url_invalida: ${sourceUrl}`);
+        progress.urlsProcessed += 1;
+        emitProgress(false, 'tape_invalid');
         continue;
       }
     }
 
     const tapeHtml = await safeFetchText(tapeUrl, warnings, 'tape');
     if (!tapeHtml) {
+      progress.urlsProcessed += 1;
+      emitProgress(false, 'tape_unreachable');
       continue;
     }
     const tapeDoc = load(tapeHtml);
@@ -205,6 +264,9 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
         addWarning(warnings, `pagina_tape_invalida: ${href}`);
       }
     });
+    progress.pagesTotal += pageUrls.size;
+    progress.stage = 'scanning_pages';
+    emitProgress(false, 'pages_discovered');
 
     await Promise.all(
       Array.from(pageUrls).map((pageUrl) =>
@@ -212,6 +274,8 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
           try {
             const pageHtml = await safeFetchText(pageUrl, warnings, 'pagina');
             if (!pageHtml) {
+              progress.pagesProcessed += 1;
+              emitProgress(false, 'page_unreachable');
               return;
             }
             const pageDoc = load(pageHtml);
@@ -240,21 +304,29 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
               totalImages += 1;
               if (/\.(jpg|png)(\?|$)/i.test(normalized)) {
                 discardedImages += 1;
+                progress.probed += 1;
+                emitProgress(false);
                 return;
               }
               candidates.push(normalized);
+              progress.candidates += 1;
             });
+            progress.stage = 'probing_images';
+            emitProgress(false, 'probing_images');
 
             await Promise.all(
               candidates.map((candidate) =>
                 probeLimit(async () => {
                   const size = await probeImage(candidate, minBytes);
+                  progress.probed += 1;
                   if (!size) {
                     discardedImages += 1;
+                    emitProgress(false);
                     return;
                   }
                   const key = `${candidate}::${size}`;
                   if (dedupe.has(key)) {
+                    emitProgress(false);
                     return;
                   }
                   dedupe.add(key);
@@ -264,17 +336,27 @@ export async function scrapeGalleries(input: ScrapeInput): Promise<ScrapeRespons
                     user,
                     title: pageTitle
                   });
+                  emitProgress(false);
                 }),
               ),
             );
+            progress.pagesProcessed += 1;
+            emitProgress(false, 'page_processed');
           } catch (error) {
             const msg = error instanceof Error ? error.message : 'erro_desconhecido';
             addWarning(warnings, `falha_pagina: ${pageUrl} (${msg})`);
+            progress.pagesProcessed += 1;
+            emitProgress(false, 'page_failed');
           }
         }),
       ),
     );
+    progress.urlsProcessed += 1;
+    emitProgress(false, 'url_processed');
   }
+
+  progress.stage = 'completed';
+  emitProgress(true, 'scrape_completed');
 
   return {
     images: foundImages,
