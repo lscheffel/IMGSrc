@@ -4,7 +4,7 @@ import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
 
-import { clearHistory, exportHistoryCsv, listHistory } from './db.js';
+import { clearHistory, exportHistoryCsv, listHistoryPage } from './db.js';
 import { downloadImages } from './services/downloader.js';
 import { scrapeGalleries } from './services/scraper.js';
 import { getMetricsSnapshot, observeHttpMetric } from './telemetry/metrics.js';
@@ -42,6 +42,11 @@ const downloadSchema = z.object({
   createUserFolder: z.boolean().default(true),
   createAlbumFolder: z.boolean().default(true),
   downloadsParallel: z.number().int().min(1).max(48).default(16)
+});
+
+const historyQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(60),
+  cursor: z.coerce.number().int().positive().optional()
 });
 
 export function createServer() {
@@ -207,10 +212,18 @@ export function createServer() {
     });
   });
 
-  app.get('/api/history', (_req, res) => {
-    res.json({
-      items: listHistory(1000)
-    });
+  app.get('/api/history', (req, res) => {
+    const parsed = historyQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'invalid_query',
+        details: parsed.error.flatten()
+      });
+      return;
+    }
+
+    const page = listHistoryPage(parsed.data.limit, parsed.data.cursor);
+    res.json(page);
   });
 
   app.get('/api/metrics', (_req, res) => {

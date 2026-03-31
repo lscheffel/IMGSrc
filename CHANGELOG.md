@@ -3,6 +3,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [2.2.0] - 2026-03-31
+### Added
+- Paginação real de histórico no backend (`GET /api/history?limit&cursor`) e virtualização no frontend.
+- Command Palette com ações de navegação, execução, presets e temas.
+- Sidebar de workspaces, atalhos de teclado e persistência de layout/tema/preset.
+- Temas escuros avançados: VSCode Dark Default, Dark+ e Kimbie Dark.
+- Camada visual Wave 4: toasts contextuais, skeleton loaders, live ribbon de operação e transições de entrada.
+
+### Changed
+- Header da UI fixo, com input rápido de URLs (alias do Search) e controles operacionais ampliados.
+- Status API/Queue agora usam telemetria real (`/api/health` + `/api/metrics`) com estados e cores distintas.
+
 ## [2.1.0] - 2026-03-30
 ### Added
 - Jobs assíncronos de busca com endpoints `POST /api/jobs/scrape` e `GET /api/jobs/scrape/:jobId`.

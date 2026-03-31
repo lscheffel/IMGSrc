@@ -38,6 +38,8 @@ type LiveEvent = {
   text: string;
 };
 
+export type PresetName = 'safe' | 'balanced' | 'turbo';
+
 type OneClickProgress = {
   stage: 'idle' | 'searching' | 'downloading' | 'completed' | 'failed';
   percent: number;
@@ -64,6 +66,7 @@ type ScraperState = {
   searchTimeline: TimelinePoint[];
   downloadTimeline: TimelinePoint[];
   oneClickTimeline: TimelinePoint[];
+  selectedPreset: PresetName;
   searchLive: SearchLiveMetrics;
   downloadLive: DownloadLiveMetrics;
   liveEvents: LiveEvent[];
@@ -71,6 +74,7 @@ type ScraperState = {
   downloadStats: DownloadResponse | null;
   error: string | null;
   setField: <K extends keyof ScraperState>(field: K, value: ScraperState[K]) => void;
+  applyPreset: (preset: PresetName) => void;
   runSearch: () => Promise<void>;
   runDownload: () => Promise<void>;
   runOneClick: () => Promise<void>;
@@ -170,6 +174,7 @@ export const useScraperStore = create<ScraperState>((set, get) => ({
   searchTimeline: [],
   downloadTimeline: [],
   oneClickTimeline: [],
+  selectedPreset: 'balanced',
   searchLive: baseSearchMetrics(),
   downloadLive: baseDownloadMetrics(),
   liveEvents: [],
@@ -181,6 +186,38 @@ export const useScraperStore = create<ScraperState>((set, get) => ({
   downloadStats: null,
   error: null,
   setField: (field, value) => set({ [field]: value } as Partial<ScraperState>),
+  applyPreset: (preset) => {
+    if (preset === 'safe') {
+      set({
+        selectedPreset: preset,
+        minSizeKb: 20,
+        scrapeThreads: 1,
+        urlWorkers: 4,
+        downloadsParallel: 6,
+        liveEvents: appendEvent(get().liveEvents, 'system', 'Preset safe aplicado')
+      });
+      return;
+    }
+    if (preset === 'turbo') {
+      set({
+        selectedPreset: preset,
+        minSizeKb: 8,
+        scrapeThreads: 4,
+        urlWorkers: 10,
+        downloadsParallel: 24,
+        liveEvents: appendEvent(get().liveEvents, 'system', 'Preset turbo aplicado')
+      });
+      return;
+    }
+    set({
+      selectedPreset: 'balanced',
+      minSizeKb: 10,
+      scrapeThreads: 2,
+      urlWorkers: 6,
+      downloadsParallel: 16,
+      liveEvents: appendEvent(get().liveEvents, 'system', 'Preset balanced aplicado')
+    });
+  },
   runSearch: async () => {
     const state = get();
     const urls = parseUrls(state.urlsInput);

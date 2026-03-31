@@ -59,4 +59,13 @@ describe('API smoke contract', () => {
     expect(Array.isArray(response.body.endpoints)).toBe(true);
     expect(response.body.queue).toBeDefined();
   });
+
+  it('supports paginated history endpoint', async () => {
+    const response = await request(app).get('/api/history?limit=10');
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body.items)).toBe(true);
+    expect(
+      response.body.nextCursor === null || typeof response.body.nextCursor === 'number',
+    ).toBe(true);
+  });
 });

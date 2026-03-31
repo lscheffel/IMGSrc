@@ -35,6 +35,7 @@ describe('useScraperStore', () => {
       searchTimeline: [],
       downloadTimeline: [],
       oneClickTimeline: [],
+      selectedPreset: 'balanced',
       searchLive: {
         startedAt: null,
         updatedAt: null,

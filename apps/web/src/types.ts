@@ -43,3 +43,19 @@ export type DownloadProgress = {
   bytes: number;
   message?: string;
 };
+
+export type HistoryRecord = {
+  id: number;
+  filename: string;
+  user: string;
+  url: string;
+  url_hash: string;
+  download_date: string;
+  path: string;
+  status: string;
+};
+
+export type HistoryPageResponse = {
+  items: HistoryRecord[];
+  nextCursor: number | null;
+};

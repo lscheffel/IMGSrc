@@ -16,6 +16,11 @@ type HistoryRow = {
   status: string;
 };
 
+type HistoryPage = {
+  items: HistoryRow[];
+  nextCursor: number | null;
+};
+
 let db: Database.Database | null = null;
 
 function resolveDbPath(): string {
@@ -81,9 +86,24 @@ export function upsertDownload(record: DownloadRecord): void {
 }
 
 export function listHistory(limit = 1000): HistoryRow[] {
-  return getDb()
-    .prepare('SELECT * FROM downloads ORDER BY id DESC LIMIT ?')
-    .all(limit) as HistoryRow[];
+  return listHistoryPage(limit).items;
+}
+
+export function listHistoryPage(limit = 100, cursor?: number): HistoryPage {
+  const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
+  const rows = Number.isFinite(cursor) && cursor && cursor > 0
+    ? (getDb()
+        .prepare('SELECT * FROM downloads WHERE id < ? ORDER BY id DESC LIMIT ?')
+        .all(cursor, safeLimit) as HistoryRow[])
+    : (getDb()
+        .prepare('SELECT * FROM downloads ORDER BY id DESC LIMIT ?')
+        .all(safeLimit) as HistoryRow[]);
+
+  const nextCursor = rows.length === safeLimit ? (rows.at(-1)?.id ?? null) : null;
+  return {
+    items: rows,
+    nextCursor
+  };
 }
 
 export function clearHistory(): number {

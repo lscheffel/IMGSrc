@@ -1,6 +1,7 @@
 import type {
   DownloadProgress,
   DownloadResponse,
+  HistoryPageResponse,
   ScrapeProgress,
   ScrapeResponse,
   ScrapedImage
@@ -8,6 +9,14 @@ import type {
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 const POLL_INTERVAL_MS = 450;
+
+export type OpsSnapshotResponse = {
+  status: string;
+  queue: {
+    download: { queued: number; running: boolean; totalJobs: number };
+    scrape: { running: number; totalJobs: number };
+  };
+};
 
 async function throwApiError(response: Response, fallback: string): Promise<never> {
   try {
@@ -163,4 +172,60 @@ export async function download(payload: {
     }
     await sleep(POLL_INTERVAL_MS);
   }
+}
+
+export async function fetchHistoryPage(input?: {
+  limit?: number;
+  cursor?: number | null;
+}): Promise<HistoryPageResponse> {
+  const params = new URLSearchParams();
+  if (input?.limit) {
+    params.set('limit', String(input.limit));
+  }
+  if (typeof input?.cursor === 'number' && Number.isFinite(input.cursor)) {
+    params.set('cursor', String(input.cursor));
+  }
+  const suffix = params.toString();
+  const response = await fetch(`${API_URL}/api/history${suffix ? `?${suffix}` : ''}`);
+  if (!response.ok) {
+    await throwApiError(response, 'Falha ao consultar historico');
+  }
+  return (await response.json()) as HistoryPageResponse;
+}
+
+export async function fetchOpsSnapshot(): Promise<OpsSnapshotResponse> {
+  const [healthResponse, metricsResponse] = await Promise.all([
+    fetch(`${API_URL}/api/health`),
+    fetch(`${API_URL}/api/metrics`)
+  ]);
+
+  if (!healthResponse.ok) {
+    await throwApiError(healthResponse, 'Falha ao consultar saude da API');
+  }
+  if (!metricsResponse.ok) {
+    await throwApiError(metricsResponse, 'Falha ao consultar fila');
+  }
+
+  const health = (await healthResponse.json()) as { status?: string };
+  const metrics = (await metricsResponse.json()) as {
+    queue?: {
+      download?: { queued?: number; running?: boolean; totalJobs?: number };
+      scrape?: { running?: number; totalJobs?: number };
+    };
+  };
+
+  return {
+    status: health.status ?? 'unknown',
+    queue: {
+      download: {
+        queued: metrics.queue?.download?.queued ?? 0,
+        running: metrics.queue?.download?.running ?? false,
+        totalJobs: metrics.queue?.download?.totalJobs ?? 0
+      },
+      scrape: {
+        running: metrics.queue?.scrape?.running ?? 0,
+        totalJobs: metrics.queue?.scrape?.totalJobs ?? 0
+      }
+    }
+  };
 }
