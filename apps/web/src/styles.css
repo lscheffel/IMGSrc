@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  scroll-behavior: smooth;
+}
+
 :root {
   --neo-bg-a: #e8f4ff;
   --neo-bg-b: #f8fbff;
@@ -31,6 +35,9 @@ body {
   color: var(--neo-text-main);
   background: var(--neo-bg-b);
   min-height: 100vh;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 a {
@@ -307,6 +314,13 @@ a {
   padding: 0.5rem 0.9rem;
 }
 
+.neo-status-pill-compact {
+  gap: 0.34rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.015em;
+  padding: 0.34rem 0.62rem;
+}
+
 .neo-status-dot {
   width: 0.46rem;
   height: 0.46rem;
@@ -363,6 +377,11 @@ a {
   font-weight: 700;
 }
 
+.neo-toolbar-btn-compact {
+  padding: 0.34rem 0.68rem;
+  font-size: 0.74rem;
+}
+
 .neo-theme-switcher {
   display: flex;
   flex-wrap: wrap;
@@ -372,6 +391,11 @@ a {
   border: 1px solid var(--neo-border);
   background: color-mix(in srgb, var(--neo-surface-strong) 88%, transparent);
   padding: 0.35rem;
+}
+
+.neo-theme-switcher-compact {
+  gap: 0.22rem;
+  padding: 0.22rem;
 }
 
 .neo-theme-btn {
@@ -384,6 +408,11 @@ a {
   background: transparent;
 }
 
+.neo-theme-btn-compact {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.68rem;
+}
+
 .neo-theme-btn:hover {
   border-color: var(--neo-border);
 }
@@ -392,6 +421,45 @@ a {
   border-color: color-mix(in srgb, var(--neo-accent) 45%, transparent);
   background: color-mix(in srgb, var(--neo-accent) 14%, var(--neo-surface-strong));
   color: color-mix(in srgb, var(--neo-accent) 76%, var(--neo-text-main));
+}
+
+.neo-info-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  border: 1px solid var(--neo-border);
+  color: var(--neo-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+
+.neo-info-tooltip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.45rem);
+  transform: translateX(-50%) translateY(4px);
+  width: 16rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 96%, transparent);
+  color: var(--neo-text-sub);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  padding: 0.45rem 0.55rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease, transform 150ms ease;
+  z-index: 12;
+}
+
+.group:hover .neo-info-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 .neo-command-item {
@@ -512,6 +580,66 @@ a {
   border-color: color-mix(in srgb, var(--neo-danger) 46%, transparent);
 }
 
+.neo-perf-mode .neo-orb {
+  display: none;
+}
+
+.neo-perf-mode .neo-surface,
+.neo-perf-mode .neo-header,
+.neo-perf-mode .neo-live-ribbon {
+  backdrop-filter: none;
+  box-shadow: 0 8px 18px -16px var(--neo-shadow);
+}
+
+.neo-perf-mode .neo-stage-enter {
+  animation: none;
+}
+
+.neo-perf-mode .neo-skeleton {
+  animation: none;
+  background: color-mix(in srgb, var(--neo-surface-strong) 94%, transparent);
+}
+
+.neo-perf-mode .neo-btn,
+.neo-perf-mode .neo-live-bar,
+.neo-perf-mode .neo-chip,
+.neo-perf-mode .neo-status-pill {
+  transition: none;
+}
+
+.neo-perf-mode .neo-btn:hover {
+  transform: none;
+}
+
+.neo-perf-ultra {
+  background: var(--neo-bg-b);
+}
+
+.neo-perf-ultra .neo-title-main {
+  text-shadow: none;
+}
+
+.neo-perf-ultra .neo-surface,
+.neo-perf-ultra .neo-header {
+  background: color-mix(in srgb, var(--neo-surface-strong) 98%, transparent);
+  box-shadow: none;
+}
+
+.neo-perf-ultra .neo-live-ribbon,
+.neo-perf-ultra .neo-toast,
+.neo-perf-ultra .neo-skeleton,
+.neo-perf-ultra .neo-orb {
+  display: none;
+}
+
+.neo-perf-ultra .neo-chip,
+.neo-perf-ultra .neo-status-pill,
+.neo-perf-ultra .neo-btn,
+.neo-perf-ultra .neo-live-bar,
+.neo-perf-ultra .neo-theme-btn {
+  transition: none !important;
+}
+
 .neo-density-compact .neo-surface {
   backdrop-filter: blur(7px);
 }
@@ -572,4 +700,20 @@ a {
 .neo-app[data-neo-palette='kimbie-dark'] .border-slate-200\/70,
 .neo-app[data-neo-palette='kimbie-dark'] .border-slate-200\/60 {
   border-color: var(--neo-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .neo-stage-enter,
+  .neo-skeleton,
+  .neo-live-bar,
+  .neo-btn,
+  .neo-chip,
+  .neo-status-pill {
+    animation: none !important;
+    transition: none !important;
+  }
 }

@@ -9,6 +9,7 @@ import { useScraperStore, type PresetName } from './store/useScraperStore';
 import type { HistoryRecord } from './types';
 
 type DensityMode = 'compact' | 'comfortable';
+type PerfMode = 'quality' | 'performance' | 'ultra';
 type PaletteMode =
   | 'cobalt'
   | 'ember'
@@ -74,6 +75,16 @@ function formatRate(value: number, unit = ''): string {
 
 function formatEventTime(ts: number): string {
   return new Date(ts).toLocaleTimeString('pt-BR', { hour12: false });
+}
+
+function cyclePerfMode(current: PerfMode): PerfMode {
+  if (current === 'quality') {
+    return 'performance';
+  }
+  if (current === 'performance') {
+    return 'ultra';
+  }
+  return 'quality';
 }
 
 function Sparkline(props: { tone: 'blue' | 'green' | 'amber'; points: TimelinePoint[] }): React.JSX.Element {
@@ -286,6 +297,7 @@ export default function App() {
   const runOneClick = state.runOneClick;
   const [route, setRoute] = useState<WorkspaceRoute>('overview');
   const [density, setDensity] = useState<DensityMode>('comfortable');
+  const [perfMode, setPerfMode] = useState<PerfMode>('quality');
   const [palette, setPalette] = useState<PaletteMode>('cobalt');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -319,11 +331,22 @@ export default function App() {
     : 0;
   const rows = useMemo(() => state.images.map((image) => ({ ...image })), [state.images]);
   const pushToast = useCallback((tone: ToastTone, title: string, detail?: string) => {
+    if (perfMode === 'ultra' && tone === 'info') {
+      return;
+    }
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setToasts((current) => [...current.slice(-3), { id, tone, title, detail }]);
     window.setTimeout(() => {
       setToasts((current) => current.filter((item) => item.id !== id));
     }, 4400);
+  }, [perfMode]);
+  const focusAddressField = useCallback(() => {
+    const node = document.getElementById('address-input') as HTMLTextAreaElement | null;
+    if (!node) {
+      return;
+    }
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    node.focus();
   }, []);
 
   const loadHistoryPage = useCallback(
@@ -396,14 +419,15 @@ export default function App() {
     };
 
     void syncOps();
+    const intervalMs = perfMode === 'ultra' ? 9000 : 4500;
     const interval = window.setInterval(() => {
       void syncOps();
-    }, 4500);
+    }, intervalMs);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [perfMode]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -430,6 +454,11 @@ export default function App() {
       if (event.altKey && event.key.toLowerCase() === 'd') {
         event.preventDefault();
         setDensity((current) => (current === 'compact' ? 'comfortable' : 'compact'));
+        return;
+      }
+      if (event.altKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        setPerfMode((current) => cyclePerfMode(current));
       }
     };
     window.addEventListener('keydown', handler);
@@ -520,8 +549,12 @@ export default function App() {
       const savedPalette = localStorage.getItem('neo_palette');
       const savedRoute = localStorage.getItem('neo_route');
       const savedPreset = localStorage.getItem('neo_preset');
+      const savedPerfMode = localStorage.getItem('neo_perf_mode');
       if (savedDensity === 'compact' || savedDensity === 'comfortable') {
         setDensity(savedDensity);
+      }
+      if (savedPerfMode === 'quality' || savedPerfMode === 'performance' || savedPerfMode === 'ultra') {
+        setPerfMode(savedPerfMode);
       }
       if (
         savedPalette === 'cobalt' ||
@@ -550,10 +583,23 @@ export default function App() {
       localStorage.setItem('neo_palette', palette);
       localStorage.setItem('neo_route', route);
       localStorage.setItem('neo_preset', selectedPreset);
+      localStorage.setItem('neo_perf_mode', perfMode);
     } catch {
       // localStorage indisponivel
     }
-  }, [density, palette, route, selectedPreset]);
+  }, [density, palette, perfMode, route, selectedPreset]);
+
+  useEffect(() => {
+    if (perfMode === 'ultra') {
+      const previous = document.documentElement.style.scrollBehavior;
+      document.documentElement.style.scrollBehavior = 'auto';
+      return () => {
+        document.documentElement.style.scrollBehavior = previous;
+      };
+    }
+    document.documentElement.style.scrollBehavior = '';
+    return;
+  }, [perfMode]);
 
   const liveStats = [
     { label: 'Paginas/s', value: formatRate(state.searchLive.pagesPerSec), hint: 'ritmo de coleta' },
@@ -706,6 +752,14 @@ export default function App() {
         run: () => setDensity((current) => (current === 'compact' ? 'comfortable' : 'compact'))
       },
       {
+        id: 'toggle-performance',
+        label: `Modo performance: ${perfMode}`,
+        group: 'Visual',
+        shortcut: 'Alt+P',
+        keywords: ['performance', 'smooth', 'scroll', 'ultra'],
+        run: () => setPerfMode((current) => cyclePerfMode(current))
+      },
+      {
         id: 'refresh-history',
         label: 'Recarregar historico',
         group: 'Data',
@@ -713,7 +767,7 @@ export default function App() {
         run: () => void loadHistoryPage(true)
       }
     ];
-  }, [applyPreset, loadHistoryPage, runDownload, runOneClick, runSearch]);
+  }, [applyPreset, loadHistoryPage, perfMode, runDownload, runOneClick, runSearch]);
 
   const apiStatusClass = apiStatus === 'online'
     ? 'neo-status-api-online'
@@ -794,14 +848,18 @@ export default function App() {
         {progressDeck}
         <section className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
           <SurfaceCard title="Parametros de Busca" subtitle="Controle de scraping e validacao">
-            <label className="text-sm font-medium text-slate-700">
-              URLs (alias com Quick URL Input do topo)
-              <textarea
-                className="neo-input mt-1 h-36 w-full rounded-lg p-2 text-sm"
-                value={state.urlsInput}
-                onChange={(event) => state.setField('urlsInput', event.target.value)}
-              />
-            </label>
+            <section className="neo-surface rounded-xl border border-white/20 p-3">
+              <p className="neo-sub-text text-sm font-semibold">Address alias ativo no header</p>
+              <p className="neo-muted-text mt-1 text-xs">
+                Use o campo Address no rodape do header. Formato: enderecos separados por virgula ou um por linha.
+              </p>
+              <button
+                className="neo-chip mt-2 rounded-lg px-3 py-1 text-xs font-semibold"
+                onClick={focusAddressField}
+              >
+                Focar Address
+              </button>
+            </section>
             <div className="mt-3 grid gap-3 sm:grid-cols-3">
               <label className="text-sm text-slate-700">
                 Min KB
@@ -1004,106 +1062,123 @@ export default function App() {
 
   return (
     <main
-      className={`neo-app ${density === 'compact' ? 'neo-density-compact' : ''}`}
+      className={`neo-app ${density === 'compact' ? 'neo-density-compact' : ''} ${
+        perfMode === 'quality' ? '' : 'neo-perf-mode'
+      } ${
+        perfMode === 'ultra' ? 'neo-perf-ultra' : ''
+      }`}
       data-neo-palette={palette}
     >
       <ToastStack items={toasts} />
       <CommandPalette open={paletteOpen} actions={commandActions} onClose={() => setPaletteOpen(false)} />
       <div className="neo-orb neo-orb-a" />
       <div className="neo-orb neo-orb-b" />
-      <div className="relative z-10 mx-auto min-h-screen max-w-7xl px-4 py-6 pb-28 md:px-6 lg:px-8">
-        <header className="neo-surface neo-header sticky top-2 z-40 rounded-3xl border border-white/40 p-5 shadow-xl shadow-slate-900/10">
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr),auto]">
-            <div>
-              <p className="neo-title-kicker text-xs uppercase tracking-[0.22em]">Neo Editorial Mission Control</p>
-              <h1 className="neo-title neo-title-main mt-1 text-3xl font-semibold md:text-4xl">
-                IMGSrc Command Center
-              </h1>
-              <p className="neo-sub-text mt-2 max-w-2xl text-sm">
-                Painel operacional unificado para busca, download, one-click e auditoria de resultados em tempo real.
-              </p>
-              <label className="mt-4 block">
-                <span className="neo-muted-text text-xs font-semibold uppercase tracking-[0.14em]">
-                  Quick URL Input (alias do Search)
-                </span>
-                <textarea
-                  className="neo-input mt-1 h-14 w-full max-w-3xl resize-none rounded-xl p-3 text-sm"
-                  rows={2}
-                  value={state.urlsInput}
-                  placeholder="Cole URLs aqui (uma por linha ou por virgula)"
-                  onChange={(event) => state.setField('urlsInput', event.target.value)}
-                />
-              </label>
+      <div className="relative z-10 mx-auto min-h-screen max-w-7xl px-4 pt-0 pb-28 md:px-6 lg:px-8">
+        <header className="neo-surface neo-header sticky top-0 z-40 rounded-3xl border border-white/40 p-4 shadow-xl shadow-slate-900/10">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="neo-title-kicker text-[10px] uppercase tracking-[0.2em]">Neo Editorial Mission Control</p>
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <button
+                className="neo-chip neo-chip-active neo-toolbar-btn neo-toolbar-btn-compact"
+                onClick={() => setPaletteOpen(true)}
+              >
+                Command Palette (Ctrl+K)
+              </button>
+              <span className={`neo-status-pill neo-status-pill-compact ${apiStatusClass}`}>
+                <span className="neo-status-dot" style={{ background: 'currentColor' }} />
+                {apiStatusLabel}
+              </span>
+              <span className={`neo-status-pill neo-status-pill-compact ${queueStatusClass}`} title={queueSummary}>
+                <span className="neo-status-dot" style={{ background: 'currentColor' }} />
+                {queueStatusLabel} | {queueSummary}
+              </span>
             </div>
-            <div className="flex flex-col items-start gap-3 xl:items-end">
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className={`neo-status-pill ${apiStatusClass}`}>
-                  <span className="neo-status-dot" style={{ background: 'currentColor' }} />
-                  {apiStatusLabel}
+          </div>
+
+          <div className="mt-3 border-t border-[var(--neo-border)] pt-3 text-center">
+            <h1 className="neo-title neo-title-main text-3xl font-semibold md:text-4xl">
+              IMGSrc Command Center
+            </h1>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-2 border-t border-[var(--neo-border)] pt-3 md:flex-row md:items-center">
+            <div className="flex items-center gap-2 md:min-w-[170px]">
+              <span className="neo-muted-text text-sm font-semibold">Adress:</span>
+              <span className="group relative inline-flex">
+                <span className="neo-info-dot">i</span>
+                <span className="neo-info-tooltip">
+                  Enderecos separados por virgula ou um por linha.
                 </span>
-                <span className={`neo-status-pill ${queueStatusClass}`} title={queueSummary}>
-                  <span className="neo-status-dot" style={{ background: 'currentColor' }} />
-                  {queueStatusLabel} | {queueSummary}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
-                  className="neo-chip neo-toolbar-btn lg:hidden"
-                  onClick={() => setSidebarOpen((current) => !current)}
-                >
-                  {sidebarOpen ? 'Fechar menu' : 'Workspaces'}
-                </button>
-                <button
-                  className="neo-chip neo-toolbar-btn"
-                  onClick={() => setDensity((current) => (current === 'compact' ? 'comfortable' : 'compact'))}
-                >
-                  Density: {density}
-                </button>
-                <button
-                  className="neo-chip neo-chip-active neo-toolbar-btn"
-                  onClick={() => setPaletteOpen(true)}
-                >
-                  Command Palette (Ctrl+K)
-                </button>
-              </div>
-              <div className="neo-theme-switcher">
-                <button
-                  className={`neo-theme-btn ${palette === 'cobalt' ? 'neo-theme-btn-active' : ''}`}
-                  onClick={() => setPalette('cobalt')}
-                >
-                  Cobalt
-                </button>
-                <button
-                  className={`neo-theme-btn ${palette === 'ember' ? 'neo-theme-btn-active' : ''}`}
-                  onClick={() => setPalette('ember')}
-                >
-                  Ember
-                </button>
-                <button
-                  className={`neo-theme-btn ${palette === 'verdant' ? 'neo-theme-btn-active' : ''}`}
-                  onClick={() => setPalette('verdant')}
-                >
-                  Verdant
-                </button>
-                <button
-                  className={`neo-theme-btn ${palette === 'vscode-dark-default' ? 'neo-theme-btn-active' : ''}`}
-                  onClick={() => setPalette('vscode-dark-default')}
-                >
-                  VSCode Dark
-                </button>
-                <button
-                  className={`neo-theme-btn ${palette === 'vscode-dark-plus' ? 'neo-theme-btn-active' : ''}`}
-                  onClick={() => setPalette('vscode-dark-plus')}
-                >
-                  Dark+
-                </button>
-                <button
-                  className={`neo-theme-btn ${palette === 'kimbie-dark' ? 'neo-theme-btn-active' : ''}`}
-                  onClick={() => setPalette('kimbie-dark')}
-                >
-                  Kimbie
-                </button>
-              </div>
+              </span>
+            </div>
+            <textarea
+              id="address-input"
+              className="neo-input h-11 w-full resize-none rounded-xl px-3 py-2 text-sm"
+              rows={1}
+              value={state.urlsInput}
+              placeholder="https://imgsrc... , https://imgsrc..."
+              onChange={(event) => state.setField('urlsInput', event.target.value)}
+            />
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 border-t border-[var(--neo-border)] pt-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                className="neo-chip neo-toolbar-btn neo-toolbar-btn-compact lg:hidden"
+                onClick={() => setSidebarOpen((current) => !current)}
+              >
+                {sidebarOpen ? 'Fechar menu' : 'Workspaces'}
+              </button>
+              <button
+                className="neo-chip neo-toolbar-btn neo-toolbar-btn-compact"
+                onClick={() => setDensity((current) => (current === 'compact' ? 'comfortable' : 'compact'))}
+              >
+                Density: {density}
+              </button>
+              <button
+                className="neo-chip neo-toolbar-btn neo-toolbar-btn-compact"
+                onClick={() => setPerfMode((current) => cyclePerfMode(current))}
+              >
+                Perf: {perfMode}
+              </button>
+            </div>
+            <div className="neo-theme-switcher neo-theme-switcher-compact">
+              <button
+                className={`neo-theme-btn neo-theme-btn-compact ${palette === 'cobalt' ? 'neo-theme-btn-active' : ''}`}
+                onClick={() => setPalette('cobalt')}
+              >
+                Cobalt
+              </button>
+              <button
+                className={`neo-theme-btn neo-theme-btn-compact ${palette === 'ember' ? 'neo-theme-btn-active' : ''}`}
+                onClick={() => setPalette('ember')}
+              >
+                Ember
+              </button>
+              <button
+                className={`neo-theme-btn neo-theme-btn-compact ${palette === 'verdant' ? 'neo-theme-btn-active' : ''}`}
+                onClick={() => setPalette('verdant')}
+              >
+                Verdant
+              </button>
+              <button
+                className={`neo-theme-btn neo-theme-btn-compact ${palette === 'vscode-dark-default' ? 'neo-theme-btn-active' : ''}`}
+                onClick={() => setPalette('vscode-dark-default')}
+              >
+                VSCode Dark
+              </button>
+              <button
+                className={`neo-theme-btn neo-theme-btn-compact ${palette === 'vscode-dark-plus' ? 'neo-theme-btn-active' : ''}`}
+                onClick={() => setPalette('vscode-dark-plus')}
+              >
+                Dark+
+              </button>
+              <button
+                className={`neo-theme-btn neo-theme-btn-compact ${palette === 'kimbie-dark' ? 'neo-theme-btn-active' : ''}`}
+                onClick={() => setPalette('kimbie-dark')}
+              >
+                Kimbie
+              </button>
             </div>
           </div>
         </header>
