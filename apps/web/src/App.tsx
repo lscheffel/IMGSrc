@@ -1141,6 +1141,13 @@ export default function App() {
               >
                 Perf: {perfMode}
               </button>
+              <button
+                className="neo-chip neo-toolbar-btn neo-toolbar-btn-compact neo-btn-danger"
+                onClick={() => void state.resetPlatform()}
+                title="Resetar plataforma"
+              >
+                Reset
+              </button>
             </div>
             <div className="neo-theme-switcher neo-theme-switcher-compact">
               <button

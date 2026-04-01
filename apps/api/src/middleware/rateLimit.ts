@@ -270,8 +270,8 @@ export function rateLimitMiddleware() {
 
   return (req: Request, res: Response, next: NextFunction): void => {
     // Rotas que não precisam de rate-limit
-    const exemptRoutes = ['/api/health', '/api/history', '/api/metrics'];
-    if (exemptRoutes.includes(req.path)) {
+    const exemptRoutes = ['/api/health', '/api/history', '/api/metrics', '/api/jobs'];
+    if (exemptRoutes.some((route) => req.path.startsWith(route))) {
       next();
       return;
     }

@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [2.3.1] - 2026-04-01
+### Fixed
+- Rate-limit bug: rotas `/api/jobs/*` exempt do rate-limit (polling a cada 450ms excedia limite de 20 req/min).
+
+### Added
+- Novo endpoint `POST /api/reset` para reset completo da plataforma (histórico, rate-limits, jobs).
+- Rotas `GET /api/jobs/scrape` e `GET /api/jobs/download` (listagem de jobs).
+- Documentação atualizada com todas as rotas da API.
+
 ## [2.3.0] - 2026-03-31
 ### Added
 - Rate-limit distribuído por host com rolling window (middleware em `apps/api/src/middleware/rateLimit.ts`).

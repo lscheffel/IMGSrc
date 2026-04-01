@@ -9,9 +9,12 @@
 | POST | `/api/jobs/download` | mesmo payload de `/api/download` | `{ jobId, status }` (202) |
 | GET | `/api/jobs/download` | `?limit&status` | `{ items[], queue }` |
 | GET | `/api/jobs/download/:jobId` | - | `{ id, status, result?, error? }` |
+| GET | `/api/jobs/scrape` | `?limit&status` | `{ items[], queue }` |
+| GET | `/api/jobs/download` | `?limit&status` | `{ items[], queue }` |
 | GET | `/api/history` | `?limit&cursor` | `{ items[], nextCursor? }` |
 | DELETE | `/api/history` | - | `{ deleted }` |
 | GET | `/api/history/export` | - | CSV stream |
+| POST | `/api/reset` | - | `{ success, message, cleared }` |
 | GET | `/api/metrics` | `?windowSec&detailed` | `{ endpoints[], queue, throughput, rateLimits? }` |
 
 ---

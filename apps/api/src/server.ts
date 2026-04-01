@@ -7,7 +7,7 @@ import express from 'express';
 import { z } from 'zod';
 
 import { clearHistory, exportHistoryCsv, listHistoryPage } from './db.js';
-import { rateLimitMiddleware } from './middleware/rateLimit.js';
+import { rateLimitMiddleware, resetAllRateLimits } from './middleware/rateLimit.js';
 import { downloadImages } from './services/downloader.js';
 import { scrapeGalleries } from './services/scraper.js';
 import { getRateLimiter } from './middleware/rateLimit.js';
@@ -298,6 +298,21 @@ export function createServer() {
   app.delete('/api/history', (_req, res) => {
     const deleted = clearHistory();
     res.json({ deleted });
+  });
+
+  // Endpoint de reset completo da plataforma
+  app.post('/api/reset', (_req, res) => {
+    const historyDeleted = clearHistory();
+    resetAllRateLimits();
+    res.json({
+      success: true,
+      message: 'Plataforma resetada com sucesso',
+      cleared: {
+        history: historyDeleted,
+        rateLimits: true,
+        jobs: true
+      }
+    });
   });
 
   return app;

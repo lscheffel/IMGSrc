@@ -229,3 +229,14 @@ export async function fetchOpsSnapshot(): Promise<OpsSnapshotResponse> {
     }
   };
 }
+
+export async function resetPlatform(): Promise<{ success: boolean; message: string; cleared: Record<string, unknown> }> {
+  const response = await fetch(`${API_URL}/api/reset`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' }
+  });
+  if (!response.ok) {
+    await throwApiError(response, 'Falha ao resetar plataforma');
+  }
+  return (await response.json()) as { success: boolean; message: string; cleared: Record<string, unknown> };
+}

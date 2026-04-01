@@ -1,4 +1,4 @@
-# IMGSrc v2.2.0
+# IMGSrc v2.3.1
 
 **[READY FOR DEVELOPMENT]**
 
@@ -76,6 +76,9 @@ imgsrc-gold-stack/
 | POST | `/api/jobs/download` | Job assíncrono de download |
 | GET | `/api/jobs/download/:jobId` | Status do job |
 | GET | `/api/history?limit&cursor` | Histórico paginado |
+| DELETE | `/api/history` | Limpar histórico |
+| GET | `/api/history/export` | Exportar CSV |
+| POST | `/api/reset` | Reset completo |
 | GET | `/api/metrics` | Métricas p50/p95 |
 
 ## Docs

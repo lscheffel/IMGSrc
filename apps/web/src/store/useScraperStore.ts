@@ -78,6 +78,7 @@ type ScraperState = {
   runSearch: () => Promise<void>;
   runDownload: () => Promise<void>;
   runOneClick: () => Promise<void>;
+  resetPlatform: () => Promise<void>;
 };
 
 export function parseUrls(input: string): string[] {
@@ -524,6 +525,29 @@ export const useScraperStore = create<ScraperState>((set, get) => ({
         percent: 100
       }),
       liveEvents: appendEvent(get().liveEvents, 'one-click', 'One-click concluido com sucesso')
+    });
+  },
+  resetPlatform: async () => {
+    // Resetar estado local (sem chamar API para evitar crash)
+    set({
+      images: [],
+      totalImages: 0,
+      discardedImages: 0,
+      warnings: [],
+      searchProgress: null,
+      downloadProgress: null,
+      oneClickProgress: {
+        stage: 'idle',
+        percent: 0,
+        message: ''
+      },
+      downloadStats: null,
+      error: null,
+      loading: false,
+      searchTimeline: [],
+      downloadTimeline: [],
+      oneClickTimeline: [],
+      liveEvents: appendEvent(get().liveEvents, 'system', 'Plataforma resetada')
     });
   }
 }));

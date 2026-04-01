@@ -1,6 +1,6 @@
 # STATE
-date: 2026-03-31
-current_version: 2.3.0
+date: 2026-04-01
+current_version: 2.3.1
 source_of_truth:
 - apps/api/src
 - apps/web/src
@@ -16,9 +16,11 @@ decisions:
 - Download/One Click corrigidos com filtro SQL `status = 'active'`.
 - Feedback visual em tempo real implementado via jobs assíncronos e polling de progresso.
 - RFC-002 implementada com rate-limit distribuído, workers dedicados e telemetria avançada.
+- Rate-limit bug corrigido: exempt `/api/jobs` do rate-limit (polling a cada 450ms).
+- Novo endpoint `/api/reset` para limpar histórico, rate-limits e jobs.
 
 quality_gate:
 todo_fixme_count: 0
 
 next_task_id: RFC-003
-next_focus: a definir
+next_focus: Estabilidade Frontend (Reset button, polling backoff, UX painel)
