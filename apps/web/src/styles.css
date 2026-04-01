@@ -1,0 +1,719 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+:root {
+  --neo-bg-a: #e8f4ff;
+  --neo-bg-b: #f8fbff;
+  --neo-bg-c: #eef6f8;
+  --neo-bg-grid: rgba(37, 99, 235, 0.11);
+  --neo-surface-a: rgba(255, 255, 255, 0.72);
+  --neo-surface-b: rgba(244, 249, 255, 0.58);
+  --neo-surface-strong: rgba(255, 255, 255, 0.82);
+  --neo-border: rgba(17, 24, 39, 0.14);
+  --neo-text-main: #111827;
+  --neo-text-sub: #4b5563;
+  --neo-text-muted: #64748b;
+  --neo-accent: #0ea5e9;
+  --neo-accent-2: #14b8a6;
+  --neo-accent-3: #f59e0b;
+  --neo-shadow: rgba(15, 23, 42, 0.12);
+  --neo-success: #10b981;
+  --neo-warning: #f59e0b;
+  --neo-danger: #ef4444;
+  --neo-title-a: #1e3a8a;
+  --neo-title-b: #0f766e;
+}
+
+body {
+  margin: 0;
+  font-family: 'Manrope', 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  color: var(--neo-text-main);
+  background: var(--neo-bg-b);
+  min-height: 100vh;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  text-decoration: none;
+}
+
+.neo-app {
+  position: relative;
+  isolation: isolate;
+  color: var(--neo-text-main);
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 8% 12%, color-mix(in srgb, var(--neo-accent) 26%, transparent), transparent 32%),
+    radial-gradient(circle at 90% 8%, color-mix(in srgb, var(--neo-accent-2) 24%, transparent), transparent 34%),
+    linear-gradient(145deg, var(--neo-bg-a) 0%, var(--neo-bg-b) 45%, var(--neo-bg-c) 100%);
+}
+
+.neo-app[data-neo-palette='ember'] {
+  --neo-bg-a: #fff1eb;
+  --neo-bg-b: #fff8f1;
+  --neo-bg-c: #fff5ef;
+  --neo-bg-grid: rgba(180, 83, 9, 0.12);
+  --neo-surface-a: rgba(255, 255, 255, 0.78);
+  --neo-surface-b: rgba(255, 245, 235, 0.64);
+  --neo-border: rgba(120, 53, 15, 0.2);
+  --neo-text-main: #3b1f13;
+  --neo-text-sub: #7c2d12;
+  --neo-text-muted: #9a3412;
+  --neo-accent: #ea580c;
+  --neo-accent-2: #d97706;
+  --neo-accent-3: #0ea5e9;
+  --neo-title-a: #9a3412;
+  --neo-title-b: #0e7490;
+}
+
+.neo-app[data-neo-palette='verdant'] {
+  --neo-bg-a: #e8fff6;
+  --neo-bg-b: #f4fffa;
+  --neo-bg-c: #f0f8ff;
+  --neo-bg-grid: rgba(5, 150, 105, 0.12);
+  --neo-surface-a: rgba(255, 255, 255, 0.76);
+  --neo-surface-b: rgba(236, 253, 245, 0.62);
+  --neo-border: rgba(6, 78, 59, 0.2);
+  --neo-text-main: #022c22;
+  --neo-text-sub: #065f46;
+  --neo-text-muted: #0f766e;
+  --neo-accent: #0f766e;
+  --neo-accent-2: #14b8a6;
+  --neo-accent-3: #0284c7;
+  --neo-title-a: #065f46;
+  --neo-title-b: #0f766e;
+}
+
+.neo-app[data-neo-palette='vscode-dark-default'] {
+  --neo-bg-a: #111418;
+  --neo-bg-b: #1e1e1e;
+  --neo-bg-c: #191f25;
+  --neo-bg-grid: rgba(64, 135, 255, 0.2);
+  --neo-surface-a: rgba(31, 38, 46, 0.9);
+  --neo-surface-b: rgba(27, 33, 41, 0.87);
+  --neo-surface-strong: rgba(39, 47, 58, 0.94);
+  --neo-border: rgba(148, 163, 184, 0.22);
+  --neo-text-main: #d4d4d4;
+  --neo-text-sub: #b0becf;
+  --neo-text-muted: #8ea1b6;
+  --neo-accent: #0a84ff;
+  --neo-accent-2: #22c55e;
+  --neo-accent-3: #f59e0b;
+  --neo-shadow: rgba(5, 8, 12, 0.65);
+  --neo-success: #22c55e;
+  --neo-warning: #fbbf24;
+  --neo-danger: #f87171;
+  --neo-title-a: #8ab4ff;
+  --neo-title-b: #4fd1c5;
+}
+
+.neo-app[data-neo-palette='vscode-dark-plus'] {
+  --neo-bg-a: #111723;
+  --neo-bg-b: #1f2530;
+  --neo-bg-c: #17212d;
+  --neo-bg-grid: rgba(86, 156, 214, 0.24);
+  --neo-surface-a: rgba(36, 45, 60, 0.9);
+  --neo-surface-b: rgba(27, 35, 48, 0.88);
+  --neo-surface-strong: rgba(43, 52, 68, 0.95);
+  --neo-border: rgba(148, 163, 184, 0.24);
+  --neo-text-main: #d8dee9;
+  --neo-text-sub: #b7c3d3;
+  --neo-text-muted: #95a8bf;
+  --neo-accent: #569cd6;
+  --neo-accent-2: #4ec9b0;
+  --neo-accent-3: #d7ba7d;
+  --neo-shadow: rgba(5, 8, 12, 0.7);
+  --neo-success: #4ec9b0;
+  --neo-warning: #d7ba7d;
+  --neo-danger: #f48771;
+  --neo-title-a: #9cdcfe;
+  --neo-title-b: #4ec9b0;
+}
+
+.neo-app[data-neo-palette='kimbie-dark'] {
+  --neo-bg-a: #1f1a13;
+  --neo-bg-b: #221a0f;
+  --neo-bg-c: #2a2115;
+  --neo-bg-grid: rgba(223, 138, 38, 0.2);
+  --neo-surface-a: rgba(47, 34, 21, 0.9);
+  --neo-surface-b: rgba(38, 28, 18, 0.88);
+  --neo-surface-strong: rgba(59, 42, 26, 0.95);
+  --neo-border: rgba(211, 162, 101, 0.26);
+  --neo-text-main: #f5e9d8;
+  --neo-text-sub: #dec8a9;
+  --neo-text-muted: #c6ad88;
+  --neo-accent: #f06431;
+  --neo-accent-2: #e0af58;
+  --neo-accent-3: #89bdff;
+  --neo-shadow: rgba(9, 5, 2, 0.7);
+  --neo-success: #9fc36c;
+  --neo-warning: #f5b75f;
+  --neo-danger: #f26d6d;
+  --neo-title-a: #f6d28d;
+  --neo-title-b: #f4824d;
+}
+
+.neo-title {
+  font-family: 'Space Grotesk', 'Sora', 'Manrope', sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.neo-title-kicker {
+  color: var(--neo-text-muted);
+}
+
+.neo-title-main {
+  color: color-mix(in srgb, var(--neo-text-main) 85%, white);
+  text-shadow: 0 5px 24px color-mix(in srgb, var(--neo-accent) 22%, transparent);
+}
+
+.neo-main-text {
+  color: var(--neo-text-main);
+}
+
+.neo-sub-text {
+  color: var(--neo-text-sub);
+}
+
+.neo-muted-text {
+  color: var(--neo-text-muted);
+}
+
+.neo-surface {
+  background:
+    linear-gradient(160deg, var(--neo-surface-a) 0%, var(--neo-surface-b) 100%);
+  backdrop-filter: blur(10px);
+  border-color: var(--neo-border);
+  box-shadow: 0 14px 34px -20px var(--neo-shadow);
+}
+
+.neo-header {
+  background: linear-gradient(160deg, var(--neo-surface-strong) 0%, var(--neo-surface-b) 100%);
+  backdrop-filter: blur(16px);
+}
+
+.neo-orb {
+  position: fixed;
+  z-index: 0;
+  width: 24rem;
+  height: 24rem;
+  border-radius: 9999px;
+  pointer-events: none;
+  filter: blur(22px);
+  opacity: 0.5;
+}
+
+.neo-orb-a {
+  top: -7rem;
+  left: -8rem;
+  background: radial-gradient(circle, color-mix(in srgb, var(--neo-accent) 52%, transparent), transparent 70%);
+}
+
+.neo-orb-b {
+  right: -9rem;
+  bottom: -10rem;
+  background: radial-gradient(circle, color-mix(in srgb, var(--neo-accent-2) 48%, transparent), transparent 70%);
+}
+
+.neo-nav-item {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--neo-surface-strong) 72%, transparent);
+  color: var(--neo-text-sub);
+}
+
+.neo-nav-item:hover {
+  border-color: var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 92%, transparent);
+}
+
+.neo-nav-active {
+  border-color: color-mix(in srgb, var(--neo-accent) 38%, transparent);
+  background: color-mix(in srgb, var(--neo-accent) 15%, var(--neo-surface-strong));
+  color: color-mix(in srgb, var(--neo-accent) 76%, var(--neo-text-main));
+  box-shadow: 0 8px 20px -14px color-mix(in srgb, var(--neo-accent) 65%, transparent);
+}
+
+.neo-input {
+  border: 1px solid var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 95%, transparent);
+  color: var(--neo-text-main);
+}
+
+.neo-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--neo-accent) 55%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--neo-accent) 28%, transparent);
+}
+
+.neo-input::placeholder {
+  color: color-mix(in srgb, var(--neo-text-sub) 64%, transparent);
+}
+
+.neo-btn {
+  border-radius: 0.7rem;
+  border: 1px solid transparent;
+  font-weight: 650;
+  transition: 170ms ease;
+  font-size: 0.9rem;
+  padding: 0.62rem 1rem;
+}
+
+.neo-btn:hover {
+  transform: translateY(-1px);
+}
+
+.neo-btn-primary {
+  background: linear-gradient(120deg, var(--neo-accent), color-mix(in srgb, var(--neo-accent) 65%, #1d4ed8));
+  color: #ffffff;
+}
+
+.neo-btn-primary:hover {
+  filter: saturate(1.14) brightness(0.96);
+}
+
+.neo-btn-secondary {
+  background: linear-gradient(120deg, var(--neo-accent-2), color-mix(in srgb, var(--neo-accent-2) 62%, #0f766e));
+  color: #ffffff;
+}
+
+.neo-btn-warning {
+  background: linear-gradient(120deg, var(--neo-accent-3), color-mix(in srgb, var(--neo-accent-3) 62%, #f97316));
+  color: #fff;
+}
+
+.neo-chip {
+  border: 1px solid var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 94%, transparent);
+  color: var(--neo-text-sub);
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+}
+
+.neo-chip-active {
+  border-color: color-mix(in srgb, var(--neo-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--neo-accent) 14%, var(--neo-surface-strong));
+  color: color-mix(in srgb, var(--neo-accent) 78%, var(--neo-text-main));
+}
+
+.neo-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.5rem 0.9rem;
+}
+
+.neo-status-pill-compact {
+  gap: 0.34rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.015em;
+  padding: 0.34rem 0.62rem;
+}
+
+.neo-status-dot {
+  width: 0.46rem;
+  height: 0.46rem;
+  border-radius: 9999px;
+}
+
+.neo-status-api-checking,
+.neo-status-queue-unknown {
+  background: color-mix(in srgb, var(--neo-text-sub) 18%, transparent);
+  border-color: color-mix(in srgb, var(--neo-text-sub) 36%, transparent);
+  color: var(--neo-text-sub);
+}
+
+.neo-status-api-online {
+  background: color-mix(in srgb, var(--neo-success) 20%, transparent);
+  border-color: color-mix(in srgb, var(--neo-success) 52%, transparent);
+  color: color-mix(in srgb, var(--neo-success) 80%, white);
+}
+
+.neo-status-api-degraded {
+  background: color-mix(in srgb, var(--neo-warning) 19%, transparent);
+  border-color: color-mix(in srgb, var(--neo-warning) 52%, transparent);
+  color: color-mix(in srgb, var(--neo-warning) 86%, white);
+}
+
+.neo-status-api-offline {
+  background: color-mix(in srgb, var(--neo-danger) 20%, transparent);
+  border-color: color-mix(in srgb, var(--neo-danger) 54%, transparent);
+  color: color-mix(in srgb, var(--neo-danger) 83%, white);
+}
+
+.neo-status-queue-idle {
+  background: color-mix(in srgb, #0ea5e9 20%, transparent);
+  border-color: color-mix(in srgb, #0ea5e9 56%, transparent);
+  color: color-mix(in srgb, #38bdf8 88%, white);
+}
+
+.neo-status-queue-processing {
+  background: color-mix(in srgb, #8b5cf6 20%, transparent);
+  border-color: color-mix(in srgb, #8b5cf6 56%, transparent);
+  color: color-mix(in srgb, #a78bfa 88%, white);
+}
+
+.neo-status-queue-backlog {
+  background: color-mix(in srgb, #f97316 21%, transparent);
+  border-color: color-mix(in srgb, #f97316 58%, transparent);
+  color: color-mix(in srgb, #fdba74 90%, white);
+}
+
+.neo-toolbar-btn {
+  border-radius: 9999px;
+  padding: 0.52rem 0.95rem;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.neo-toolbar-btn-compact {
+  padding: 0.34rem 0.68rem;
+  font-size: 0.74rem;
+}
+
+.neo-theme-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 9999px;
+  border: 1px solid var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 88%, transparent);
+  padding: 0.35rem;
+}
+
+.neo-theme-switcher-compact {
+  gap: 0.22rem;
+  padding: 0.22rem;
+}
+
+.neo-theme-btn {
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  padding: 0.42rem 0.8rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--neo-text-sub);
+  background: transparent;
+}
+
+.neo-theme-btn-compact {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.68rem;
+}
+
+.neo-theme-btn:hover {
+  border-color: var(--neo-border);
+}
+
+.neo-theme-btn-active {
+  border-color: color-mix(in srgb, var(--neo-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--neo-accent) 14%, var(--neo-surface-strong));
+  color: color-mix(in srgb, var(--neo-accent) 76%, var(--neo-text-main));
+}
+
+.neo-info-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  border: 1px solid var(--neo-border);
+  color: var(--neo-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+
+.neo-info-tooltip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.45rem);
+  transform: translateX(-50%) translateY(4px);
+  width: 16rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 96%, transparent);
+  color: var(--neo-text-sub);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  padding: 0.45rem 0.55rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease, transform 150ms ease;
+  z-index: 12;
+}
+
+.group:hover .neo-info-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.neo-command-item {
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--neo-surface-strong) 86%, transparent);
+  color: var(--neo-text-sub);
+}
+
+.neo-command-item:hover {
+  border-color: var(--neo-border);
+}
+
+.neo-command-item-active {
+  border-color: color-mix(in srgb, var(--neo-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--neo-accent) 16%, var(--neo-surface-strong));
+  color: color-mix(in srgb, var(--neo-accent) 78%, var(--neo-text-main));
+}
+
+.neo-command-shortcut {
+  border: 1px solid var(--neo-border);
+  background: color-mix(in srgb, var(--neo-surface-strong) 78%, transparent);
+  color: var(--neo-text-muted);
+}
+
+@keyframes neo-enter-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes neo-shimmer {
+  0% {
+    background-position: -220px 0;
+  }
+  100% {
+    background-position: calc(220px + 100%) 0;
+  }
+}
+
+.neo-stage-enter {
+  animation: neo-enter-up 280ms ease-out;
+}
+
+.neo-skeleton {
+  border: 1px solid var(--neo-border);
+  background:
+    linear-gradient(
+      100deg,
+      color-mix(in srgb, var(--neo-surface-strong) 92%, transparent) 20%,
+      color-mix(in srgb, var(--neo-accent) 16%, var(--neo-surface-strong)) 42%,
+      color-mix(in srgb, var(--neo-surface-strong) 92%, transparent) 64%
+    );
+  background-size: 220px 100%;
+  animation: neo-shimmer 1.2s linear infinite;
+}
+
+.neo-live-ribbon {
+  position: fixed;
+  left: 0.9rem;
+  right: 0.9rem;
+  bottom: 0.9rem;
+  z-index: 65;
+  border-radius: 0.95rem;
+  border: 1px solid var(--neo-border);
+  padding: 0.72rem 0.85rem;
+  background: color-mix(in srgb, var(--neo-surface-strong) 92%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 14px 34px -22px var(--neo-shadow);
+  color: var(--neo-text-sub);
+}
+
+.neo-live-ribbon-active {
+  border-color: color-mix(in srgb, var(--neo-accent) 46%, transparent);
+  box-shadow: 0 18px 36px -22px color-mix(in srgb, var(--neo-accent) 42%, transparent);
+}
+
+.neo-live-track {
+  height: 0.48rem;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--neo-border) 44%, transparent);
+}
+
+.neo-live-bar {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(110deg, var(--neo-accent), var(--neo-accent-2));
+  transition: width 280ms ease-out;
+}
+
+.neo-toast {
+  border-radius: 0.8rem;
+  border: 1px solid var(--neo-border);
+  padding: 0.65rem 0.8rem;
+  background: color-mix(in srgb, var(--neo-surface-strong) 95%, transparent);
+  color: var(--neo-text-main);
+  box-shadow: 0 12px 26px -18px var(--neo-shadow);
+}
+
+.neo-toast-info {
+  border-color: color-mix(in srgb, var(--neo-accent) 44%, transparent);
+}
+
+.neo-toast-success {
+  border-color: color-mix(in srgb, var(--neo-success) 46%, transparent);
+}
+
+.neo-toast-warning {
+  border-color: color-mix(in srgb, var(--neo-warning) 46%, transparent);
+}
+
+.neo-toast-danger {
+  border-color: color-mix(in srgb, var(--neo-danger) 46%, transparent);
+}
+
+.neo-perf-mode .neo-orb {
+  display: none;
+}
+
+.neo-perf-mode .neo-surface,
+.neo-perf-mode .neo-header,
+.neo-perf-mode .neo-live-ribbon {
+  backdrop-filter: none;
+  box-shadow: 0 8px 18px -16px var(--neo-shadow);
+}
+
+.neo-perf-mode .neo-stage-enter {
+  animation: none;
+}
+
+.neo-perf-mode .neo-skeleton {
+  animation: none;
+  background: color-mix(in srgb, var(--neo-surface-strong) 94%, transparent);
+}
+
+.neo-perf-mode .neo-btn,
+.neo-perf-mode .neo-live-bar,
+.neo-perf-mode .neo-chip,
+.neo-perf-mode .neo-status-pill {
+  transition: none;
+}
+
+.neo-perf-mode .neo-btn:hover {
+  transform: none;
+}
+
+.neo-perf-ultra {
+  background: var(--neo-bg-b);
+}
+
+.neo-perf-ultra .neo-title-main {
+  text-shadow: none;
+}
+
+.neo-perf-ultra .neo-surface,
+.neo-perf-ultra .neo-header {
+  background: color-mix(in srgb, var(--neo-surface-strong) 98%, transparent);
+  box-shadow: none;
+}
+
+.neo-perf-ultra .neo-live-ribbon,
+.neo-perf-ultra .neo-toast,
+.neo-perf-ultra .neo-skeleton,
+.neo-perf-ultra .neo-orb {
+  display: none;
+}
+
+.neo-perf-ultra .neo-chip,
+.neo-perf-ultra .neo-status-pill,
+.neo-perf-ultra .neo-btn,
+.neo-perf-ultra .neo-live-bar,
+.neo-perf-ultra .neo-theme-btn {
+  transition: none !important;
+}
+
+.neo-density-compact .neo-surface {
+  backdrop-filter: blur(7px);
+}
+
+.neo-density-compact .neo-surface p {
+  line-height: 1.28;
+}
+
+.neo-app[data-neo-palette='vscode-dark-default'] .text-slate-900,
+.neo-app[data-neo-palette='vscode-dark-default'] .text-slate-800,
+.neo-app[data-neo-palette='vscode-dark-default'] .text-slate-700,
+.neo-app[data-neo-palette='vscode-dark-default'] .text-slate-600,
+.neo-app[data-neo-palette='vscode-dark-default'] .text-slate-500,
+.neo-app[data-neo-palette='vscode-dark-plus'] .text-slate-900,
+.neo-app[data-neo-palette='vscode-dark-plus'] .text-slate-800,
+.neo-app[data-neo-palette='vscode-dark-plus'] .text-slate-700,
+.neo-app[data-neo-palette='vscode-dark-plus'] .text-slate-600,
+.neo-app[data-neo-palette='vscode-dark-plus'] .text-slate-500,
+.neo-app[data-neo-palette='kimbie-dark'] .text-slate-900,
+.neo-app[data-neo-palette='kimbie-dark'] .text-slate-800,
+.neo-app[data-neo-palette='kimbie-dark'] .text-slate-700,
+.neo-app[data-neo-palette='kimbie-dark'] .text-slate-600,
+.neo-app[data-neo-palette='kimbie-dark'] .text-slate-500 {
+  color: var(--neo-text-sub);
+}
+
+.neo-app[data-neo-palette='vscode-dark-default'] .bg-white\/80,
+.neo-app[data-neo-palette='vscode-dark-default'] .bg-white\/70,
+.neo-app[data-neo-palette='vscode-dark-default'] .bg-white\/60,
+.neo-app[data-neo-palette='vscode-dark-plus'] .bg-white\/80,
+.neo-app[data-neo-palette='vscode-dark-plus'] .bg-white\/70,
+.neo-app[data-neo-palette='vscode-dark-plus'] .bg-white\/60,
+.neo-app[data-neo-palette='kimbie-dark'] .bg-white\/80,
+.neo-app[data-neo-palette='kimbie-dark'] .bg-white\/70,
+.neo-app[data-neo-palette='kimbie-dark'] .bg-white\/60 {
+  background-color: color-mix(in srgb, var(--neo-surface-strong) 90%, transparent);
+}
+
+.neo-app[data-neo-palette='vscode-dark-default'] .bg-slate-50,
+.neo-app[data-neo-palette='vscode-dark-default'] .bg-slate-100\/70,
+.neo-app[data-neo-palette='vscode-dark-default'] .bg-slate-100,
+.neo-app[data-neo-palette='vscode-dark-plus'] .bg-slate-50,
+.neo-app[data-neo-palette='vscode-dark-plus'] .bg-slate-100\/70,
+.neo-app[data-neo-palette='vscode-dark-plus'] .bg-slate-100,
+.neo-app[data-neo-palette='kimbie-dark'] .bg-slate-50,
+.neo-app[data-neo-palette='kimbie-dark'] .bg-slate-100\/70,
+.neo-app[data-neo-palette='kimbie-dark'] .bg-slate-100 {
+  background-color: color-mix(in srgb, var(--neo-surface-b) 95%, transparent);
+}
+
+.neo-app[data-neo-palette='vscode-dark-default'] .border-slate-300,
+.neo-app[data-neo-palette='vscode-dark-default'] .border-slate-200\/70,
+.neo-app[data-neo-palette='vscode-dark-default'] .border-slate-200\/60,
+.neo-app[data-neo-palette='vscode-dark-plus'] .border-slate-300,
+.neo-app[data-neo-palette='vscode-dark-plus'] .border-slate-200\/70,
+.neo-app[data-neo-palette='vscode-dark-plus'] .border-slate-200\/60,
+.neo-app[data-neo-palette='kimbie-dark'] .border-slate-300,
+.neo-app[data-neo-palette='kimbie-dark'] .border-slate-200\/70,
+.neo-app[data-neo-palette='kimbie-dark'] .border-slate-200\/60 {
+  border-color: var(--neo-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .neo-stage-enter,
+  .neo-skeleton,
+  .neo-live-bar,
+  .neo-btn,
+  .neo-chip,
+  .neo-status-pill {
+    animation: none !important;
+    transition: none !important;
+  }
+}
